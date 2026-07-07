@@ -1,0 +1,271 @@
+name: CodeWeave — AI-driven code manuscript and improvement pipeline
+
+# Orchestrator ("glue"). Each phase is a reusable workflow under
+# .github/workflows/phase-*.yml; this file wires them with needs/if (resume +
+# skip logic) and shared inputs. Phases 7 (optimization) and 8 (report) are
+# separate, auto-chaining workflows (phase-7-optimize.yml / phase-8-report.yml):
+# once Phase 6 produces a v2 baseline, the `trigger-phase-7` job below dispatches
+# the first optimization cycle, which self-chains through the remaining cycles
+# and finally into Phase 8 — so a single dispatch of this workflow runs Phases
+# 1–8 end-to-end.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_from_phase:
+        description: 'Resume from phase: 1 (Book), 2 (ADR), 3 (Harness), 4 (Tests), 5 (Source Build), 6 (Baseline Execution)'
+        type: choice
+        options: ['1', '2', '3', '4', '5', '6']
+        default: '1'
+      dry_run:
+        description: 'Skip copilot invocations and override prerequisite checks to test workflow structure'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  phase-1:
+    if: inputs.start_from_phase == '1'
+    uses: ./.github/workflows/phase-1-book.yml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  phase-2:
+    needs: phase-1
+    if: |
+      always() && !cancelled() &&
+      (needs.phase-1.result == 'success' ||
+       (needs.phase-1.result == 'skipped' && inputs.start_from_phase == '2'))
+    uses: ./.github/workflows/phase-2-adr.yml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  phase-3:
+    needs: phase-2
+    if: |
+      always() && !cancelled() &&
+      (needs.phase-2.result == 'success' ||
+       (needs.phase-2.result == 'skipped' && inputs.start_from_phase == '3'))
+    uses: ./.github/workflows/phase-3-harness.yml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  phase-4:
+    needs: phase-3
+    if: |
+      always() && !cancelled() &&
+      (needs.phase-3.result == 'success' || inputs.start_from_phase == '4')
+    uses: ./.github/workflows/phase-4-tests.yml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  phase-5-6:
+    needs: phase-4
+    if: |
+      always() && !cancelled() &&
+      (needs.phase-4.result == 'success' || inputs.start_from_phase == '5' || inputs.start_from_phase == '6')
+    uses: ./.github/workflows/phase-5-6-build-baseline.yml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+      start_from_phase: ${{ inputs.start_from_phase }}
+    secrets: inherit
+
+  trigger-phase-7:
+    name: 'Trigger Phase 7 (optimization cycles)'
+    needs: phase-5-6
+    # Dispatch the first optimization cycle once Phase 6 produced a baseline.
+    # Phase 7 self-chains through the remaining cycles and into Phase 8, so this
+    # single dispatch carries the pipeline from 6 all the way to 8. In dry-run
+    # Phase 6 stubs baseline-complete.md (baseline_complete=1), so the structure
+    # smoke-test exercises the full 1→8 chain too.
+    if: |
+      always() && !cancelled() &&
+      needs.phase-5-6.outputs.baseline_complete == '1'
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+      actions: write          # gh workflow run (dispatch Phase 7) needs actions:write
+    steps:
+      - name: Dispatch first optimization cycle (auto-chains 7 → … → 8)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Phase 6 baseline complete — dispatching Phase 7 optimization cycle 1."
+          echo "It auto-chains through the remaining cycles and finally triggers Phase 8."
+          gh workflow run phase-7-optimize.yml -R "${{ github.repository }}" --ref "${{ github.ref }}" \
+            -f optimization_index=1 -f total_optimizations=0 \
+            -f dry_run=${{ inputs.dry_run }}
+
+  finalize:
+    name: 'Finalize: Record Status'
+    runs-on: [self-hosted, Linux, X64]
+    needs: [phase-1, phase-2, phase-3, phase-4, phase-5-6]
+    if: always() && !cancelled()
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+          # On a single self-hosted runner this job shares the workspace with
+          # phase-5-6 and runs right after it. The default clean (git clean
+          # -ffdx + reset --hard) would delete the untracked, git-excluded src/
+          # checkout and integration-test/.venv that Phase 7/8 reuse in place —
+          # which then fail their "src/ + .venv present" prerequisite gate. Keep
+          # the build artifacts; finalize only adds/commits proof/.
+          clean: false
+
+      - name: Load configuration
+        run: |
+          set -a; source .github/.env; set +a
+          {
+            echo "GIT_USER_NAME=${GIT_USER_NAME}"
+            echo "GIT_USER_EMAIL=${GIT_USER_EMAIL}"
+            echo "PHASE1_MAX_ITERATIONS=${PHASE1_MAX_ITERATIONS}"
+            echo "PHASE2_MAX_ITERATIONS=${PHASE2_MAX_ITERATIONS}"
+            echo "PHASE3_MAX_ITERATIONS=${PHASE3_MAX_ITERATIONS}"
+            echo "PHASE4_MAX_ITERATIONS=${PHASE4_MAX_ITERATIONS}"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+          git config advice.addIgnoredFile false
+
+      - name: Write final status
+        env:
+          PHASE1_RESULT:             ${{ needs.phase-1.result }}
+          PHASE1_MANUSCRIPT_COMPLETE: ${{ needs.phase-1.outputs.manuscript_complete }}
+          PHASE1_PDF_GENERATED:       ${{ needs.phase-1.outputs.pdf_generated }}
+          PHASE1_ITERATIONS:          ${{ needs.phase-1.outputs.iterations_run }}
+          PHASE2_RESULT:             ${{ needs.phase-2.result }}
+          PHASE2_ADR_COMPLETE:        ${{ needs.phase-2.outputs.adr_complete }}
+          PHASE2_ADR_PDF_BUILT:       ${{ needs.phase-2.outputs.adr_pdf_built }}
+          PHASE2_ADR_INDEX_BUILT:     ${{ needs.phase-2.outputs.adr_index_built }}
+          PHASE2_ITERATIONS:          ${{ needs.phase-2.outputs.iterations_run }}
+          PHASE3_RESULT:             ${{ needs.phase-3.result }}
+          PHASE3_STRATEGY_COMPLETE:   ${{ needs.phase-3.outputs.strategy_complete }}
+          PHASE3_ITERATIONS:          ${{ needs.phase-3.outputs.iterations_run }}
+          PHASE4_RESULT:             ${{ needs.phase-4.result }}
+          PHASE4_TESTS_COMPLETE:      ${{ needs.phase-4.outputs.tests_complete }}
+          PHASE4_ITERATIONS:          ${{ needs.phase-4.outputs.iterations_run }}
+          PHASE5_RESULT:             ${{ needs.phase-5-6.result }}
+          PHASE5_SOURCE_BUILD_COMPLETE: ${{ needs.phase-5-6.outputs.source_build_complete }}
+          START_FROM_PHASE:          ${{ inputs.start_from_phase }}
+          PHASE6_RESULT:            ${{ needs.phase-5-6.result }}
+          PHASE6_BASELINE_COMPLETE:  ${{ needs.phase-5-6.outputs.baseline_complete }}
+        run: |
+          mkdir -p proof
+          {
+            if [ "$PHASE1_RESULT" = "skipped" ]; then
+              echo "Phase 1: Skipped (resumed from later phase)."
+            elif [ "$PHASE1_PDF_GENERATED" = "1" ]; then
+              echo "Phase 1: Manuscript complete and PDF built after ${PHASE1_ITERATIONS} book iteration(s)."
+            elif [ "$PHASE1_MANUSCRIPT_COMPLETE" = "1" ]; then
+              echo "Phase 1: Manuscript complete after ${PHASE1_ITERATIONS} iteration(s) but PDF build failed — see proof/pdf-build.md."
+            elif [ "$PHASE1_RESULT" = "success" ]; then
+              echo "Phase 1: Completed ${PHASE1_ITERATIONS} of ${PHASE1_MAX_ITERATIONS} book iterations. Manuscript not complete."
+            else
+              echo "Phase 1: ${PHASE1_RESULT}."
+            fi
+
+            if [ "$PHASE2_RESULT" = "skipped" ] && [ "$PHASE1_RESULT" = "skipped" ]; then
+              echo "Phase 2: Skipped (resumed from later phase)."
+            elif [ "$PHASE2_RESULT" = "skipped" ]; then
+              echo "Phase 2: Skipped (Phase 1 did not produce a PDF)."
+            elif [ "$PHASE2_ADR_COMPLETE" = "1" ]; then
+              echo "Phase 2: ADR coverage complete after ${PHASE2_ITERATIONS} ADR iteration(s)."
+            elif [ "$PHASE2_RESULT" = "success" ]; then
+              echo "Phase 2: Completed ${PHASE2_ITERATIONS} of ${PHASE2_MAX_ITERATIONS} ADR iterations. Coverage may be partial."
+            else
+              echo "Phase 2: ${PHASE2_RESULT}."
+            fi
+
+            if [ "$PHASE2_ADR_PDF_BUILT" = "1" ]; then
+              echo "ADR PDF: Built successfully."
+            elif [ "$PHASE2_RESULT" = "success" ]; then
+              echo "ADR PDF: Not built."
+            fi
+
+            if [ "$PHASE2_ADR_INDEX_BUILT" = "1" ]; then
+              echo "ADR Index: Generated and pushed (src/ADR-INDEX.md)."
+            fi
+
+            if [ "$PHASE3_RESULT" = "skipped" ]; then
+              echo "Phase 3: Skipped (no ADR index available or Phase 2 did not succeed)."
+            elif [ "$PHASE3_STRATEGY_COMPLETE" = "1" ]; then
+              echo "Phase 3: Test strategy complete after ${PHASE3_ITERATIONS} strategy iteration(s)."
+            elif [ "$PHASE3_RESULT" = "success" ]; then
+              echo "Phase 3: Completed ${PHASE3_ITERATIONS} of ${PHASE3_MAX_ITERATIONS} strategy iterations. Strategy not complete."
+            else
+              echo "Phase 3: ${PHASE3_RESULT}."
+            fi
+
+            if [ "$PHASE4_RESULT" = "skipped" ]; then
+              echo "Phase 4: Skipped (Phase 3 did not complete)."
+            elif [ "$PHASE4_TESTS_COMPLETE" = "1" ]; then
+              echo "Phase 4: Integration test code complete after ${PHASE4_ITERATIONS} iteration(s)."
+            elif [ "$PHASE4_RESULT" = "success" ]; then
+              echo "Phase 4: Completed ${PHASE4_ITERATIONS} of ${PHASE4_MAX_ITERATIONS} iterations. Code generation not complete."
+            else
+              echo "Phase 4: ${PHASE4_RESULT}."
+            fi
+
+            if [ "$START_FROM_PHASE" = "6" ]; then
+              echo "Phase 5: Skipped (resumed at baseline)."
+            elif [ "$PHASE5_SOURCE_BUILD_COMPLETE" = "1" ]; then
+              echo "Phase 5: Source build complete. See integration-test/reports/build-source.md."
+            elif [ "$PHASE5_RESULT" = "skipped" ]; then
+              echo "Phase 5: Skipped (Phase 4 did not complete)."
+            else
+              echo "Phase 5: Source build did not complete — see integration-test/reports/build-source.md."
+            fi
+
+            if [ "$PHASE6_RESULT" = "skipped" ]; then
+              echo "Phase 6: Skipped (Phase 4 did not complete)."
+            elif [ "$PHASE6_BASELINE_COMPLETE" = "1" ]; then
+              echo "Phase 6: Baseline execution complete. See integration-test/reports/baseline.json."
+            elif [ "$PHASE6_RESULT" = "success" ]; then
+              echo "Phase 6: Execution finished but baseline-complete.md not written — check proof/6-baseline-run-*.log."
+            else
+              echo "Phase 6: ${PHASE6_RESULT}."
+            fi
+
+            echo ""
+            if [ "$PHASE6_BASELINE_COMPLETE" = "1" ]; then
+              echo "Phases 7-8: dispatched automatically after Phase 6 (auto-chaining workflows) — see proof/7-opt-*-complete.md and integration-test/reports/phase8-report.md."
+            else
+              echo "Phases 7-8: not dispatched (Phase 6 baseline did not complete). Re-run Phase 6, or kick off manually: gh workflow run phase-7-optimize.yml -f optimization_index=1."
+            fi
+          } | tee "proof/final-status.md"
+
+          git add proof/
+          if ! git diff --cached --quiet; then
+            git commit -m "Record final status"
+          fi
+
+      - name: Push final status
+        id: push-final-status
+        continue-on-error: true   # don't let a tail-end push error mask whether it landed
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Verify final status push
+        if: ${{ always() && inputs.dry_run == false }}
+        run: |
+          LOCAL_HEAD="$(git rev-parse HEAD)"
+          REMOTE_HEAD="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          if [ "$LOCAL_HEAD" = "$REMOTE_HEAD" ]; then
+            echo "Final status changes are present on origin/${GITHUB_REF_NAME}: ${LOCAL_HEAD}"
+            exit 0
+          fi
+          echo "ERROR: Final status changes were not pushed to origin/${GITHUB_REF_NAME}"
+          echo "Local HEAD:  ${LOCAL_HEAD}"
+          echo "Remote HEAD: ${REMOTE_HEAD:-<missing>}"
+          exit 1

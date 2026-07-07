@@ -1,0 +1,245 @@
+name: 'Phase 1 — Book Generation'
+
+# Reusable: called by codeweave.yml. Generate+validate loop; builds book.pdf +
+# BOOK-INDEX.md. Clones the external repo fresh into src/ and creates the work
+# branch (this is the first phase, so it establishes src/).
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+    outputs:
+      manuscript_complete:
+        value: ${{ jobs.phase-1-book.outputs.manuscript_complete }}
+      iterations_run:
+        value: ${{ jobs.phase-1-book.outputs.iterations_run }}
+      pdf_generated:
+        value: ${{ jobs.phase-1-book.outputs.pdf_generated }}
+      book_index_built:
+        value: ${{ jobs.phase-1-book.outputs.book_index_built }}
+
+permissions:
+  contents: write
+
+jobs:
+  phase-1-book:
+    name: 'Phase 1: Book Generation'
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      manuscript_complete: ${{ steps.iterations.outputs.manuscript_complete }}
+      iterations_run:      ${{ steps.iterations.outputs.iterations_run }}
+      pdf_generated:       ${{ steps.build-pdf.outputs.pdf_generated }}
+      book_index_built:    ${{ steps.build-book-index.outputs.book_index_built }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+      - uses: ./.github/actions/codeweave-setup
+        with:
+          dry_run: ${{ inputs.dry_run }}
+      - name: Clone external repository into src
+        run: |
+          rm -rf src tools
+          git clone --depth 1 --branch "$EXTERNAL_REPO_BRANCH" "$EXTERNAL_REPO_URL" src
+          git -C src config user.name "$GIT_USER_NAME"
+          git -C src config user.email "$GIT_USER_EMAIL"
+          git -C src config --global push.autoSetupRemote true
+          git -C src checkout -b "$EXTERNAL_REPO_WORK_BRANCH"
+          echo "src/" >> .git/info/exclude
+          echo "tools/" >> .git/info/exclude
+
+      - name: Phase 1 iterations
+        id: iterations
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof
+
+          resolve_model() {
+            local schedule="$1" iter="$2" elapsed=0 last=""
+            IFS=',' read -ra entries <<< "$schedule"
+            for entry in "${entries[@]}"; do
+              entry="${entry// /}"
+              if [[ "$entry" == *":"* ]]; then
+                local model="${entry%%:*}" count="${entry##*:}"
+                elapsed=$((elapsed + count)); last="$model"
+                [ "$iter" -le "$elapsed" ] && echo "$model" && return
+              else
+                echo "$entry"; return
+              fi
+            done
+            echo "$last"
+          }
+
+          COPILOT_PROMPT="Work on the task described in work/1-generate-book.md and constraints/project.md. Analyze ./src and make improvements according to the outlined goals."
+          BOOK_VALIDATE_PROMPT="Validate the book manuscript as described in work/1-validate-book.md and constraints/project.md. Do not write new chapters or modify existing chapter content."
+
+          MANUSCRIPT_COMPLETE=0
+          i=0
+
+          for i in $(seq 1 "$PHASE1_MAX_ITERATIONS"); do
+            CURRENT_MODEL=$(resolve_model "$PHASE1_MODEL_SCHEDULE" "$i")
+
+            echo "::group::Iteration $i / ${PHASE1_MAX_ITERATIONS} — Generate"
+            echo "## Run $i [generate]" | tee "proof/1-book-generation-$i.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/1-book-generation-$i.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot generate" | tee -a "proof/1-book-generation-$i.md"
+            else
+              copilot -p "$COPILOT_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/1-book-generation-session-$i.md" \
+                2>&1 | tee -a "proof/1-book-generation-$i.md"
+              test ${PIPESTATUS[0]} -eq 0
+            fi
+
+            git add -A
+            if git diff --cached --quiet; then
+              echo "No generation changes in run $i" | tee -a "proof/1-book-generation-$i.md"
+              git commit -m "Phase 1: record book generation run $i"
+            else
+              git commit -m "Phase 1: book generation run $i"
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Iteration $i / ${PHASE1_MAX_ITERATIONS} — Validate"
+            echo "## Run $i [validate]" | tee "proof/1-book-validation-$i.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/1-book-validation-$i.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot validate" | tee -a "proof/1-book-validation-$i.md"
+            else
+              copilot -p "$BOOK_VALIDATE_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/1-book-validation-session-$i.md" \
+                2>&1 | tee -a "proof/1-book-validation-$i.md"
+            fi
+
+            [ -f "book/BOOK-VALIDATION.md" ] && cp "book/BOOK-VALIDATION.md" "proof/1-book-validation-report-$i.md"
+
+            if [ "${DRY_RUN}" = "true" ] && [ "$i" -eq 1 ]; then
+              mkdir -p book
+              touch book/manuscript-complete.md
+            fi
+
+            git add -A
+            if git diff --cached --quiet; then
+              git commit -m "Phase 1: record book validation run $i"
+            else
+              git commit -m "Phase 1: book validation run $i"
+            fi
+            echo "::endgroup::"
+
+            if [ -f "book/manuscript-complete.md" ]; then
+              echo "Manuscript complete after run $i — stopping Phase 1" | tee -a "proof/1-book-validation-$i.md"
+              MANUSCRIPT_COMPLETE=1
+              break
+            fi
+          done
+
+          echo "manuscript_complete=${MANUSCRIPT_COMPLETE}" >> "$GITHUB_OUTPUT"
+          echo "iterations_run=${i}" >> "$GITHUB_OUTPUT"
+
+      - name: Build PDF
+        id: build-pdf
+        run: |
+          PDF_GENERATED=0
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: skipping PDF build"
+            echo "pdf_generated=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ ! -f "book/manuscript-complete.md" ]; then
+            echo "Manuscript not complete — skipping PDF build"
+            echo "pdf_generated=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Building PDF from manuscript..." | tee "proof/pdf-build.md"
+
+          # Download tools if needed
+          mkdir -p tools/bin
+          if [ ! -f "tools/bin/pandoc" ] && ! command -v pandoc > /dev/null 2>&1; then
+            echo "Downloading pandoc..." | tee -a "proof/pdf-build.md"
+            curl -fsSL "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-linux-amd64.tar.gz" | tar -xz --strip-components=2 -C tools/bin 2>&1 | tee -a "proof/pdf-build.md" || { echo "ERROR: Failed to download pandoc" | tee -a "proof/pdf-build.md"; exit 1; }
+            chmod +x tools/bin/pandoc
+          fi
+
+          if [ ! -f "tools/bin/typst" ] && ! command -v typst > /dev/null 2>&1; then
+            echo "Downloading typst..." | tee -a "proof/pdf-build.md"
+            curl -fsSL "https://github.com/typst/typst/releases/download/v0.14.2/typst-x86_64-unknown-linux-musl.tar.xz" | tar -xJ --strip-components=1 -C tools/bin 2>&1 | tee -a "proof/pdf-build.md" || { echo "ERROR: Failed to download typst" | tee -a "proof/pdf-build.md"; exit 1; }
+            chmod +x tools/bin/typst
+          fi
+
+          # Locate tools
+          TOOL_PANDOC=$(command -v pandoc 2>/dev/null || echo "tools/bin/pandoc")
+          TOOL_TYPST=$(command -v typst 2>/dev/null || echo "tools/bin/typst")
+
+          if [ ! -f "$TOOL_PANDOC" ]; then
+            echo "ERROR: pandoc not found at $TOOL_PANDOC" | tee -a "proof/pdf-build.md"
+            exit 1
+          fi
+          if [ ! -f "$TOOL_TYPST" ]; then
+            echo "ERROR: typst not found at $TOOL_TYPST" | tee -a "proof/pdf-build.md"
+            exit 1
+          fi
+
+          CHAPTERS=$(ls book/[0-9][0-9]-*.md 2>/dev/null | sort -V)
+          CHAPTER_COUNT=$(echo "$CHAPTERS" | grep -c .)
+
+          if [ -z "$CHAPTERS" ]; then
+            echo "ERROR: No numbered chapter files found (book/[0-9][0-9]-*.md)" | tee -a "proof/pdf-build.md"
+          else
+            echo "Assembling $CHAPTER_COUNT chapters" | tee -a "proof/pdf-build.md"
+            # shellcheck disable=SC2086
+            "$TOOL_PANDOC" $CHAPTERS -o book.pdf \
+              --pdf-engine="$TOOL_TYPST" \
+              --from markdown-citations \
+              --table-of-contents \
+              --toc-depth=2 \
+              --metadata title="${EXTERNAL_REPO_NAME} — Architecture and Implementation" \
+              --metadata author="CodeWeave" \
+              --metadata date="$(date +%Y-%m-%d)" \
+              2>&1 | tee -a "proof/pdf-build.md"
+
+            if [ -f "book.pdf" ]; then
+              echo "PDF built successfully ($CHAPTER_COUNT chapters)" | tee -a "proof/pdf-build.md"
+              PDF_GENERATED=1
+            else
+              echo "ERROR: PDF build failed — see proof/pdf-build.md" | tee -a "proof/pdf-build.md"
+            fi
+          fi
+
+          git add -A
+          git commit -m "Phase 1: build book PDF"
+          echo "pdf_generated=${PDF_GENERATED}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate book index
+        id: build-book-index
+        run: |
+          BOOK_INDEX_BUILT=0
+          node .github/scripts/generate-indexes.js --generate-book-index 2>&1 | tee "proof/book-index.md" || true
+          if [ -f "book/BOOK-INDEX.md" ]; then
+            git add book/BOOK-INDEX.md
+            if ! git diff --cached --quiet; then
+              git commit -m "Phase 1: generate BOOK-INDEX.md"
+              BOOK_INDEX_BUILT=1
+            fi
+          fi
+          echo "book_index_built=${BOOK_INDEX_BUILT}" >> "$GITHUB_OUTPUT"
+
+      - name: Push Phase 1 changes
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"

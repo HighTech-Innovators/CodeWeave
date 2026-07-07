@@ -1,0 +1,283 @@
+name: 'Phase 2 — ADR Generation'
+
+# Reusable: called by codeweave.yml. Generate+validate ADRs; commits+pushes to
+# the target work branch (needs PUSH_TOKEN via secrets: inherit). Builds adr.pdf
+# + ADR-INDEX.md.
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+    outputs:
+      adr_complete:
+        value: ${{ jobs.phase-2-adr.outputs.adr_complete }}
+      iterations_run:
+        value: ${{ jobs.phase-2-adr.outputs.iterations_run }}
+      adr_pdf_built:
+        value: ${{ jobs.phase-2-adr.outputs.adr_pdf_built }}
+      adr_index_built:
+        value: ${{ jobs.phase-2-adr.outputs.adr_index_built }}
+
+permissions:
+  contents: write
+
+jobs:
+  phase-2-adr:
+    name: 'Phase 2: ADR Generation'
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      adr_complete:    ${{ steps.iterations.outputs.adr_complete }}
+      iterations_run:  ${{ steps.iterations.outputs.iterations_run }}
+      adr_pdf_built:   ${{ steps.build-adr-pdf.outputs.adr_pdf_built }}
+      adr_index_built: ${{ steps.build-indexes.outputs.adr_index_built }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+      - uses: ./.github/actions/codeweave-setup
+        with:
+          dry_run: ${{ inputs.dry_run }}
+      - name: Check Phase 2 prerequisites
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: creating stub book.pdf to satisfy prerequisite"
+            touch book.pdf
+          elif [ ! -f "book.pdf" ]; then
+            echo "ERROR: book.pdf not found — Phase 1 must complete successfully before Phase 2"
+            exit 1
+          fi
+          echo "Prerequisites satisfied: book.pdf found"
+
+      - name: Clone external repository into src
+        env:
+          GITHUB_PUSH_TOKEN: ${{ secrets.PUSH_TOKEN }}
+        run: |
+          rm -rf src tools
+          # Try the work branch first (resume scenario); fall back to source branch.
+          git clone --depth 1 --branch "$EXTERNAL_REPO_WORK_BRANCH" "$EXTERNAL_REPO_URL" src 2>/dev/null \
+            || git clone --depth 1 --branch "$EXTERNAL_REPO_BRANCH" "$EXTERNAL_REPO_URL" src
+          git -C src config user.name "$GIT_USER_NAME"
+          git -C src config user.email "$GIT_USER_EMAIL"
+          git -C src config --global push.autoSetupRemote true
+          git -C src checkout "$EXTERNAL_REPO_WORK_BRANCH" 2>/dev/null || git -C src checkout -b "$EXTERNAL_REPO_WORK_BRANCH"
+          AUTHENTICATED_URL=$(echo "$EXTERNAL_REPO_URL" | sed "s|https://|https://${GITHUB_PUSH_TOKEN}@|")
+          git -C src remote set-url origin "$AUTHENTICATED_URL"
+          echo "src/" >> .git/info/exclude
+          echo "tools/" >> .git/info/exclude
+
+      - name: Phase 2 iterations
+        id: iterations
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof
+
+          resolve_model() {
+            local schedule="$1" iter="$2" elapsed=0 last=""
+            IFS=',' read -ra entries <<< "$schedule"
+            for entry in "${entries[@]}"; do
+              entry="${entry// /}"
+              if [[ "$entry" == *":"* ]]; then
+                local model="${entry%%:*}" count="${entry##*:}"
+                elapsed=$((elapsed + count)); last="$model"
+                [ "$iter" -le "$elapsed" ] && echo "$model" && return
+              else
+                echo "$entry"; return
+              fi
+            done
+            echo "$last"
+          }
+
+          ADR_PROMPT="Work on the task described in work/2-generate-adrs.md and constraints/project.md. Generate ADRs for ./src using ./book as reference."
+          ADR_VALIDATE_PROMPT="Validate ADR coverage as described in work/2-validate-adrs.md and constraints/project.md. Do not write new ADRs or modify existing ADR content."
+
+          ADR_COMPLETE=0
+          j=0
+
+          for j in $(seq 1 "$PHASE2_MAX_ITERATIONS"); do
+            CURRENT_MODEL=$(resolve_model "$PHASE2_MODEL_SCHEDULE" "$j")
+
+            if [ -f "src/adrs-complete.md" ]; then
+              rm "src/adrs-complete.md"
+              echo "WARNING: Removed stale adrs-complete.md before run $j — only the validator may write this file" | tee -a "proof/2-adrs-generation-$j.md"
+            fi
+
+            echo "::group::Iteration $j / ${PHASE2_MAX_ITERATIONS} — Generate"
+            echo "## ADR Run $j [generate]" | tee "proof/2-adrs-generation-$j.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/2-adrs-generation-$j.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot ADR generate" | tee -a "proof/2-adrs-generation-$j.md"
+            else
+              copilot -p "$ADR_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/2-adrs-generation-session-$j.md" \
+                2>&1 | tee -a "proof/2-adrs-generation-$j.md"
+              test ${PIPESTATUS[0]} -eq 0
+            fi
+
+            git -C src add -A
+            if git -C src diff --cached --quiet; then
+              echo "No ADR changes in run $j" | tee -a "proof/2-adrs-generation-$j.md"
+            else
+              git -C src commit -m "Phase 2: ADR generation run $j"
+            fi
+            git add proof/
+            git commit -m "Phase 2: record ADR generation run $j"
+            echo "::endgroup::"
+
+            echo "::group::Iteration $j / ${PHASE2_MAX_ITERATIONS} — Validate"
+            echo "## ADR Run $j [validate]" | tee "proof/2-adrs-validation-$j.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/2-adrs-validation-$j.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot ADR validate" | tee -a "proof/2-adrs-validation-$j.md"
+            else
+              copilot -p "$ADR_VALIDATE_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/2-adrs-validation-session-$j.md" \
+                2>&1 | tee -a "proof/2-adrs-validation-$j.md"
+            fi
+
+            [ -f "src/ADR-VALIDATION.md" ] && cp "src/ADR-VALIDATION.md" "proof/2-adrs-validation-report-$j.md"
+
+            if [ "${DRY_RUN}" = "true" ] && [ "$j" -eq 1 ]; then
+              touch src/adrs-complete.md
+            fi
+
+            git -C src add -A
+            if git -C src diff --cached --quiet; then
+              echo "No validation changes in run $j" | tee -a "proof/2-adrs-validation-$j.md"
+            else
+              git -C src commit -m "Phase 2: ADR validation run $j"
+            fi
+            git add proof/
+            git commit -m "Phase 2: record ADR validation run $j"
+            echo "::endgroup::"
+
+            if [ -f "src/adrs-complete.md" ]; then
+              echo "ADR coverage complete after run $j — stopping Phase 2" | tee -a "proof/2-adrs-validation-$j.md"
+              ADR_COMPLETE=1
+              break
+            fi
+          done
+
+          echo "adr_complete=${ADR_COMPLETE}" >> "$GITHUB_OUTPUT"
+          echo "iterations_run=${j}" >> "$GITHUB_OUTPUT"
+
+      - name: Build ADR PDF
+        id: build-adr-pdf
+        run: |
+          ADR_PDF_BUILT=0
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: skipping ADR PDF build"
+            echo "adr_pdf_built=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ADR_FILES=$(find src -name 'ADR.md' | sort 2>/dev/null || true)
+          ADR_COUNT=$(echo "$ADR_FILES" | grep -c . 2>/dev/null || echo 0)
+
+          if [ -z "$ADR_FILES" ] || [ "$ADR_COUNT" -eq 0 ]; then
+            echo "No ADR.md files found — skipping ADR PDF build" | tee "proof/adr-pdf-build.md"
+            echo "adr_pdf_built=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Building ADR PDF ($ADR_COUNT files)..." | tee "proof/adr-pdf-build.md"
+
+          # Download tools if needed
+          mkdir -p tools/bin
+          if [ ! -f "tools/bin/pandoc" ] && ! command -v pandoc > /dev/null 2>&1; then
+            echo "Downloading pandoc..." | tee -a "proof/adr-pdf-build.md"
+            curl -fsSL "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-linux-amd64.tar.gz" | tar -xz --strip-components=2 -C tools/bin 2>&1 | tee -a "proof/adr-pdf-build.md" || { echo "ERROR: Failed to download pandoc" | tee -a "proof/adr-pdf-build.md"; exit 1; }
+            chmod +x tools/bin/pandoc
+          fi
+
+          if [ ! -f "tools/bin/typst" ] && ! command -v typst > /dev/null 2>&1; then
+            echo "Downloading typst..." | tee -a "proof/adr-pdf-build.md"
+            curl -fsSL "https://github.com/typst/typst/releases/download/v0.14.2/typst-x86_64-unknown-linux-musl.tar.xz" | tar -xJ --strip-components=1 -C tools/bin 2>&1 | tee -a "proof/adr-pdf-build.md" || { echo "ERROR: Failed to download typst" | tee -a "proof/adr-pdf-build.md"; exit 1; }
+            chmod +x tools/bin/typst
+          fi
+
+          # Locate tools
+          TOOL_PANDOC=$(command -v pandoc 2>/dev/null || echo "tools/bin/pandoc")
+          TOOL_TYPST=$(command -v typst 2>/dev/null || echo "tools/bin/typst")
+
+          if [ ! -f "$TOOL_PANDOC" ]; then
+            echo "ERROR: pandoc not found at $TOOL_PANDOC" | tee -a "proof/adr-pdf-build.md"
+            exit 1
+          fi
+          if [ ! -f "$TOOL_TYPST" ]; then
+            echo "ERROR: typst not found at $TOOL_TYPST" | tee -a "proof/adr-pdf-build.md"
+            exit 1
+          fi
+
+          # shellcheck disable=SC2086
+          "$TOOL_PANDOC" $ADR_FILES -o adr.pdf \
+            --pdf-engine="$TOOL_TYPST" \
+            --from markdown-citations \
+            --table-of-contents \
+            --toc-depth=2 \
+            --metadata title="${EXTERNAL_REPO_NAME} — Architecture Decision Records" \
+            --metadata author="CodeWeave" \
+            --metadata date="$(date +%Y-%m-%d)" \
+            2>&1 | tee -a "proof/adr-pdf-build.md"
+
+          if [ -f "adr.pdf" ]; then
+            echo "ADR PDF built successfully ($ADR_COUNT ADRs)" | tee -a "proof/adr-pdf-build.md"
+            ADR_PDF_BUILT=1
+          else
+            echo "ERROR: ADR PDF build failed — see proof/adr-pdf-build.md" | tee -a "proof/adr-pdf-build.md"
+          fi
+
+          git add -A
+          git commit -m "Phase 2: build ADR PDF"
+          echo "adr_pdf_built=${ADR_PDF_BUILT}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate navigation indexes
+        id: build-indexes
+        run: |
+          BOOK_INDEX_BUILT=0
+          ADR_INDEX_BUILT=0
+
+          node .github/scripts/generate-indexes.js --generate-adr-index 2>&1 | tee "proof/adr-index.md" || true
+
+          if [ "${DRY_RUN}" = "true" ] && [ ! -f "src/ADR-INDEX.md" ]; then
+            echo "DRY RUN: creating stub src/ADR-INDEX.md" | tee -a "proof/adr-index.md"
+            echo "# ADR Index (dry-run stub)" > src/ADR-INDEX.md
+          fi
+
+          if [ -f "book/BOOK-INDEX.md" ]; then
+            git add book/BOOK-INDEX.md
+            if ! git diff --cached --quiet; then
+              git commit -m "Phase 2: update BOOK-INDEX.md"
+              BOOK_INDEX_BUILT=1
+            fi
+          fi
+
+          if [ -f "src/ADR-INDEX.md" ]; then
+            git -C src add ADR-INDEX.md
+            if ! git -C src diff --cached --quiet; then
+              git -C src commit -m "Phase 2: generate ADR-INDEX.md"
+              ADR_INDEX_BUILT=1
+            fi
+          fi
+
+          echo "adr_index_built=${ADR_INDEX_BUILT}" >> "$GITHUB_OUTPUT"
+
+      - name: Push Phase 2 changes
+        run: |
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git -C src push origin "HEAD:${EXTERNAL_REPO_WORK_BRANCH}"

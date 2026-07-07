@@ -1,0 +1,35 @@
+name: 'CodeWeave Setup'
+description: >-
+  Shared per-job bootstrap: Node 22 + Copilot CLI, load .github/.env into the
+  job environment, and configure git identity. Run AFTER actions/checkout
+  (it sources .github/.env from the checked-out repo).
+
+inputs:
+  dry_run:
+    description: 'Value exported as DRY_RUN for the phase steps'
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Install Copilot CLI
+      shell: bash
+      run: npm install -g @github/copilot
+
+    - name: Load configuration + git identity
+      shell: bash
+      run: |
+        # Export every KEY=value from .env (comments/blank lines skipped) to the
+        # job env, plus DRY_RUN. `source` also makes them available in-shell here
+        # so the git identity below can use $GIT_USER_NAME immediately.
+        set -a; source .github/.env; set +a
+        grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .github/.env >> "$GITHUB_ENV"
+        echo "DRY_RUN=${{ inputs.dry_run }}" >> "$GITHUB_ENV"
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+        git config advice.addIgnoredFile false

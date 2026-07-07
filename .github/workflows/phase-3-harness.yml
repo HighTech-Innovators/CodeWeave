@@ -1,0 +1,165 @@
+name: 'Phase 3 — Performance Measurement Harness'
+
+# Reusable: called by codeweave.yml. Generate+validate the 3-doc measurement
+# harness; only the validator writes integration-test/harness-complete.md.
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+    outputs:
+      strategy_complete:
+        value: ${{ jobs.phase-3-harness.outputs.strategy_complete }}
+      iterations_run:
+        value: ${{ jobs.phase-3-harness.outputs.iterations_run }}
+
+permissions:
+  contents: write
+
+jobs:
+  phase-3-harness:
+    name: 'Phase 3: Performance Measurement Harness'
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      strategy_complete: ${{ steps.iterations.outputs.strategy_complete }}
+      iterations_run:    ${{ steps.iterations.outputs.iterations_run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+      - uses: ./.github/actions/codeweave-setup
+        with:
+          dry_run: ${{ inputs.dry_run }}
+      - name: Clone external repository into src
+        run: |
+          rm -rf src tools
+          git clone --depth 1 --branch "$EXTERNAL_REPO_WORK_BRANCH" "$EXTERNAL_REPO_URL" src
+          git -C src config user.name "$GIT_USER_NAME"
+          git -C src config user.email "$GIT_USER_EMAIL"
+          git -C src config --global push.autoSetupRemote true
+          echo "src/" >> .git/info/exclude
+          echo "tools/" >> .git/info/exclude
+
+      - name: Check Phase 3 prerequisites
+        run: |
+          if [ "${DRY_RUN}" = "true" ] && [ ! -f "src/ADR-INDEX.md" ]; then
+            echo "DRY RUN: creating stub src/ADR-INDEX.md to satisfy prerequisite"
+            echo "# ADR Index (dry-run stub)" > src/ADR-INDEX.md
+          elif [ ! -f "src/ADR-INDEX.md" ]; then
+            echo "ERROR: src/ADR-INDEX.md not found — Phase 2 must complete successfully before Phase 3"
+            exit 1
+          fi
+          echo "Prerequisites satisfied: src/ADR-INDEX.md found"
+
+      - name: Phase 3 iterations
+        id: iterations
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof integration-test
+
+          resolve_model() {
+            local schedule="$1" iter="$2" elapsed=0 last=""
+            IFS=',' read -ra entries <<< "$schedule"
+            for entry in "${entries[@]}"; do
+              entry="${entry// /}"
+              if [[ "$entry" == *":"* ]]; then
+                local model="${entry%%:*}" count="${entry##*:}"
+                elapsed=$((elapsed + count)); last="$model"
+                [ "$iter" -le "$elapsed" ] && echo "$model" && return
+              else
+                echo "$entry"; return
+              fi
+            done
+            echo "$last"
+          }
+
+          STRATEGY_PROMPT="Work on the task described in work/3-generate-harness.md and constraints/project.md. Read constraints/harness.md for performance measurement constraints. Analyse ./src using ./book and ./integration-test as reference. The ADR navigation index is at src/ADR-INDEX.md and the book navigation index is at book/BOOK-INDEX.md."
+          STRATEGY_VALIDATE_PROMPT="Validate the test strategy as described in work/3-validate-harness.md and constraints/project.md. Read constraints/harness.md for performance measurement constraints. Do not write or modify integration-test/AGENTS.md, integration-test/SOURCE-UNDER-INVESTIGATION.md, or integration-test/WORK.md."
+
+          STRATEGY_COMPLETE=0
+          k=0
+
+          for k in $(seq 1 "$PHASE3_MAX_ITERATIONS"); do
+            CURRENT_MODEL=$(resolve_model "$PHASE3_MODEL_SCHEDULE" "$k")
+
+            if [ -f "integration-test/harness-complete.md" ]; then
+              rm "integration-test/harness-complete.md"
+              echo "WARNING: Removed stale harness-complete.md before run $k — only the validator may write this file" | tee -a "proof/3-harness-generation-$k.md"
+            fi
+
+            echo "::group::Iteration $k / ${PHASE3_MAX_ITERATIONS} — Generate"
+            echo "## Strategy Run $k [generate]" | tee "proof/3-harness-generation-$k.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/3-harness-generation-$k.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot strategy generate" | tee -a "proof/3-harness-generation-$k.md"
+            else
+              copilot -p "$STRATEGY_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/3-harness-generation-session-$k.md" \
+                2>&1 | tee -a "proof/3-harness-generation-$k.md"
+              test ${PIPESTATUS[0]} -eq 0
+            fi
+
+            bash .github/scripts/clean-nested-git.sh   # drop any nested .git an agent created under integration-test/
+            git add -A
+            if git diff --cached --quiet; then
+              echo "No strategy changes in run $k" | tee -a "proof/3-harness-generation-$k.md"
+              git commit -m "Phase 3: record harness generation run $k"
+            else
+              git commit -m "Phase 3: harness generation run $k"
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Iteration $k / ${PHASE3_MAX_ITERATIONS} — Validate"
+            echo "## Strategy Run $k [validate]" | tee "proof/3-harness-validation-$k.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/3-harness-validation-$k.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot strategy validate" | tee -a "proof/3-harness-validation-$k.md"
+            else
+              copilot -p "$STRATEGY_VALIDATE_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/3-harness-validation-session-$k.md" \
+                2>&1 | tee -a "proof/3-harness-validation-$k.md"
+            fi
+
+            [ -f "integration-test/HARNESS-VALIDATION.md" ] && cp "integration-test/HARNESS-VALIDATION.md" "proof/3-harness-validation-report-$k.md"
+
+            if [ "${DRY_RUN}" = "true" ] && [ "$k" -eq 1 ]; then
+              mkdir -p integration-test
+              touch integration-test/harness-complete.md
+            fi
+
+            bash .github/scripts/clean-nested-git.sh   # drop any nested .git an agent created under integration-test/
+            git add -A
+            if git diff --cached --quiet; then
+              git commit -m "Phase 3: record harness validation run $k"
+            else
+              git commit -m "Phase 3: harness validation run $k"
+            fi
+            echo "::endgroup::"
+
+            if [ -f "integration-test/harness-complete.md" ]; then
+              echo "Test strategy complete after run $k — stopping Phase 3" | tee -a "proof/3-harness-validation-$k.md"
+              STRATEGY_COMPLETE=1
+              break
+            fi
+          done
+
+          echo "strategy_complete=${STRATEGY_COMPLETE}" >> "$GITHUB_OUTPUT"
+          echo "iterations_run=${k}" >> "$GITHUB_OUTPUT"
+
+      - name: Push Phase 3 changes
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"

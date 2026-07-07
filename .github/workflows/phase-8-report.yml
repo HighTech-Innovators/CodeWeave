@@ -1,0 +1,115 @@
+name: 'Phase 8 — Aggregate Report'
+
+# Triggered by the final optimization cycle's auto-chain (or manually). Reads
+# every proof/7-opt-*-complete.md + ab-comparison-opt*.json and writes
+# integration-test/reports/phase8-report.md + phase8-summary.md. An authoring
+# task (read/write/edit/create, no shell); verdicts already computed by ab_compare.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Skip the copilot invocation; exercise workflow structure only'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write          # commit + push the report; no further chaining
+
+concurrency:
+  group: optimization-cycle   # share the cycle lock so it cannot race a trailing cycle
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  phase8-report:
+    name: 'Phase 8: Aggregate Report'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+          clean: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Load configuration
+        run: |
+          set -a; source .github/.env; set +a
+          {
+            echo "GIT_USER_NAME=${GIT_USER_NAME}"
+            echo "GIT_USER_EMAIL=${GIT_USER_EMAIL}"
+            echo "PHASE8_MODEL=${PHASE8_MODEL:-claude-sonnet-4.6}"
+            echo "DRY_RUN=${{ inputs.dry_run }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+          git config advice.addIgnoredFile false
+
+      - name: Verify Phase 7 results exist
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then echo "DRY RUN: skipping prerequisite check"; exit 0; fi
+          if ! ls proof/7-opt-*-complete.md >/dev/null 2>&1; then
+            echo "ERROR: no proof/7-opt-*-complete.md found — run the optimization cycles first"
+            exit 1
+          fi
+
+      - name: Phase 8 — Family-wise correction (Holm-Bonferroni)
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          # A5: deterministically correct KEEPs for multiplicity across all
+          # measured cycles BEFORE the agent aggregates, so a KEEP that is
+          # significant per-cycle but not after family-wise control is demoted.
+          # Writes integration-test/reports/family-correction.{json,md}.
+          eval "$(node .github/scripts/load-harness-manifest.js)"   # HARNESS_VENV_PYTHON (defaults to .venv/bin/python)
+          VENV_PY="$PWD/integration-test/${HARNESS_VENV_PYTHON:-.venv/bin/python}"
+          if [ -x "$VENV_PY" ] && [ -f integration-test/_tools/ab_compare.py ]; then
+            "$VENV_PY" integration-test/_tools/ab_compare.py --mode family \
+              --reports-dir integration-test/reports --output-dir integration-test/reports
+          else
+            echo "::warning::venv or ab_compare.py missing — skipping family-wise correction"
+          fi
+
+      - name: Phase 8 — Aggregate report
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof integration-test/reports
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: stubbing phase8 reports"
+            printf "# Phase 8 — Aggregate Optimization Report\n\n(dry-run stub)\n" > integration-test/reports/phase8-report.md
+            printf "# Phase 8 — Executive Summary\n\n(dry-run stub)\n" > integration-test/reports/phase8-summary.md
+          else
+            echo "::group::Phase 8 — aggregate report"
+            copilot -p "Work on the task described in work/8-aggregate-report.md." \
+              --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --allow-tool='shell' --deny-tool='shell(git:*)' \
+              --model="${PHASE8_MODEL}" --no-ask-user \
+              --share="proof/8-aggregate-report-session.md" \
+              2>&1 | tee "proof/8-aggregate-report.md"
+            echo "::endgroup::"
+          fi
+          if [ ! -f integration-test/reports/phase8-report.md ]; then
+            echo "ERROR: phase8-report.md was not written"; exit 1
+          fi
+
+      - name: Commit + push
+        if: ${{ !cancelled() }}
+        run: |
+          git add proof/ integration-test/reports/
+          git diff --cached --quiet || git commit -m "Phase 8: aggregate optimization report"
+          git push || echo "push skipped/failed (non-fatal)"

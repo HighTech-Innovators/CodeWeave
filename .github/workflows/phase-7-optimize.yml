@@ -1,0 +1,537 @@
+name: 'Phase 7 — Optimization Cycles'
+
+# One optimization per run. Cycles auto-chain: each run triggers the next index
+# via `gh workflow run`, and the final index triggers the Phase 8 report. This
+# includes the 7f differential-fuzz gate (golden captured on the BASE build
+# before the first incremental build) and the v2.2 ab_compare invocation, in an
+# auto-chaining one-optimization-per-run structure.
+#
+# RUNNER ASSUMPTION (D4): this workflow reuses the src/ checkout, the built
+# integration-test/.venv, and warm ccache left on the self-hosted runner by
+# Phase 5/6. The checkout step uses clean: false so those untracked artifacts
+# survive. If src/ or .venv are absent the cycle fails fast — run the main
+# pipeline through Phase 6 on this runner first.
+
+on:
+  workflow_dispatch:
+    inputs:
+      optimization_index:
+        description: 'Which optimization to run (1-based)'
+        required: true
+        type: number
+        default: 1
+      total_optimizations:
+        description: 'Total optimization points (0 = read PHASE7_MAX_OPTIMIZATIONS from .env)'
+        required: false
+        type: number
+        default: 0
+      dry_run:
+        description: 'Skip copilot/build/measurement; exercise workflow structure + auto-chain only'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write          # gh workflow run (auto-chain) needs actions:write
+
+concurrency:
+  group: optimization-cycle   # serialize cycles; auto-chain may fire before job teardown
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash         # explicit: bash -eo pipefail (default `bash -e` has no pipefail)
+
+jobs:
+  optimization-cycle:
+    name: 'Phase 7: Optimization ${{ inputs.optimization_index }}'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240   # repair-loop builds + 2x measurement blocks + A-side rebuild
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+          clean: false          # preserve persisted src/ + integration-test/.venv + ccache
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Load configuration
+        run: |
+          set -a; source .github/.env; set +a
+          # Load the harness toolchain manifest: eval sets HARNESS_* for this
+          # step (VENV_PY below) and the same invocation appends them to
+          # $GITHUB_ENV for later steps (profiler env, hotspot path). Defaults
+          # reproduce the built-in toolchain.
+          eval "$(node .github/scripts/load-harness-manifest.js)"
+          TOTAL="${{ inputs.total_optimizations }}"
+          if [ "$TOTAL" -eq 0 ]; then TOTAL="${PHASE7_MAX_OPTIMIZATIONS:-5}"; fi
+          {
+            echo "GIT_USER_NAME=${GIT_USER_NAME}"
+            echo "GIT_USER_EMAIL=${GIT_USER_EMAIL}"
+            echo "EXTERNAL_REPO_URL=${EXTERNAL_REPO_URL}"
+            echo "EXTERNAL_REPO_WORK_BRANCH=${EXTERNAL_REPO_WORK_BRANCH}"
+            echo "PHASE7_MAX_OPTIMIZATIONS=${PHASE7_MAX_OPTIMIZATIONS:-5}"
+            echo "PHASE7_MAX_ITERATIONS=${PHASE7_MAX_ITERATIONS:-3}"
+            echo "PHASE7_MODEL_SCHEDULE=${PHASE7_MODEL_SCHEDULE:-claude-opus-4.6:1,claude-sonnet-4.6}"
+            echo "PHASE7_SELECTION_MODEL=${PHASE7_SELECTION_MODEL:-claude-opus-4.6}"
+            echo "PHASE7_FUZZ_REQUIRED=${PHASE7_FUZZ_REQUIRED:-1}"
+            echo "PHASE7_BASELINE_RUNS=${PHASE7_BASELINE_RUNS:-5}"
+            echo "PHASE7_MICROBENCH_MIN_SECONDS=${PHASE7_MICROBENCH_MIN_SECONDS:-10}"
+            echo "TOTAL_OPTIMIZATIONS=${TOTAL}"
+            echo "CCACHE_DIR=${HOME}/.ccache-codeweave"
+            echo "CCACHE_MAXSIZE=15G"
+            echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+            echo "VENV_PY=${PWD}/integration-test/${HARNESS_VENV_PYTHON:-.venv/bin/python}"
+            echo "DRY_RUN=${{ inputs.dry_run }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+          git config advice.addIgnoredFile false
+
+      - name: Verify runner prerequisites (src/ + venv + source build + v2 baseline)
+        id: prereq
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: skipping prerequisite verification"
+            exit 0
+          fi
+          fail=0
+          [ -d src ] || { echo "ERROR: src/ missing — run the main pipeline through Phase 6 on this runner first"; fail=1; }
+          [ -x "$VENV_PY" ] || { echo "ERROR: integration-test/.venv missing — Phase 5/6 must have built it on this runner"; fail=1; }
+          # Ensure the harness venv and source build are current for this src/ HEAD.
+          # setup.sh is idempotent: a no-op when everything is already correct (~5 s),
+          # but self-heals a stale environment left by a different runner (e.g. wrong
+          # Python version, missing deps, or Phase 5/6 never ran on this host).
+          # setup.sh covers any external repo language: it handles both the source build
+          # (via build-source.sh) AND the Python harness venv + requirements, so it works
+          # whether the external repo is Python, Go, Rust, C++, or any other language.
+          if [ "$fail" = 0 ] && [ -f integration-test/setup.sh ]; then
+            bash integration-test/setup.sh \
+              || { echo "ERROR: setup.sh failed — environment is not current; re-run the main pipeline through Phase 6 on this runner"; fail=1; }
+          fi
+          # B3: refuse a FAILED/missing Phase 5 source build — otherwise Phase 7
+          # would A/B against a stale wheel install. (Local --phase7-only already
+          # checks this; the GHA gate omitted it.)
+          if [ ! -f integration-test/reports/build-source.md ] || grep -q 'Status: FAILED' integration-test/reports/build-source.md; then
+            echo "ERROR: source build report missing or FAILED — run Phase 5 first"; fail=1
+          fi
+          [ -f integration-test/reports/baseline.json ] || { echo "ERROR: baseline.json missing — Phase 6 must have completed"; fail=1; }
+          # Reject not just non-v2 but also the error/incomplete stub Phase 6
+          # writes on failure (schema is v2 but it carries an error field / n<=0 /
+          # no stats): optimizing against a stub baseline is the A7 hole.
+          if [ "$fail" = 0 ]; then
+            "$VENV_PY" -c "import json,sys; d=json.load(open('integration-test/reports/baseline.json')); sys.exit(0 if (d.get('schema')=='v2' and 'error' not in d and (d.get('n') or 0)>0 and 'median_iter_ms_mean' in d and 'cv_iter' in d) else 1)" \
+              || { echo 'ERROR: baseline.json is not a valid v2 baseline (needs schema v2, n>0, median_iter_ms_mean and cv_iter, no error) — re-run Phase 6'; fail=1; }
+          fi
+          [ "$fail" = 0 ] || exit 1
+
+      - name: Step 1 — Hotspot selection (index=1 only, if plan absent)
+        if: ${{ inputs.optimization_index == 1 }}
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof
+          if [ -f integration-test/optimization-plan.md ]; then
+            echo "optimization-plan.md exists — skipping hotspot selection"
+            exit 0
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: stubbing optimization-plan.md"
+            mkdir -p integration-test
+            printf '## Optimization 1: dry-run-stub\n\n- **Target op**: `aten::noop`\n- **Measurement path**: microbench\n' \
+              > integration-test/optimization-plan.md
+          else
+            echo "::group::Phase 7 — hotspot selection"
+            copilot -p "Work on the task described in work/7-select-hotspots.md. Select exactly ${TOTAL_OPTIMIZATIONS} optimization points (this is the PHASE7_MAX_OPTIMIZATIONS value for this run)." \
+              --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --allow-tool='shell' --deny-tool='shell(git:*)' \
+              --model="${PHASE7_SELECTION_MODEL}" --no-ask-user \
+              --share="proof/7-hotspot-selection-session.md" \
+              2>&1 | tee "proof/7-hotspot-selection.md"
+            echo "::endgroup::"
+          fi
+          if [ ! -f integration-test/optimization-plan.md ]; then
+            echo "ERROR: optimization-plan.md was not written"; exit 1
+          fi
+          bash .github/scripts/clean-nested-git.sh   # drop any nested .git an agent created under integration-test/
+          git add -A
+          git diff --cached --quiet || git commit -m "Phase 7: hotspot selection"
+
+      - name: Steps 2-4 — Generate, golden, build, correctness gate (repair loop)
+        id: genloop
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof
+          N=${{ inputs.optimization_index }}
+          PLAN=integration-test/optimization-plan.md
+          VAL=integration-test/OPTIMIZATION-VALIDATION.md
+
+          resolve_model() {
+            local schedule="$1" iter="$2" elapsed=0 last=""
+            IFS=',' read -ra entries <<< "$schedule"
+            for entry in "${entries[@]}"; do
+              entry="${entry// /}"
+              if [[ "$entry" == *":"* ]]; then
+                local model="${entry%%:*}" count="${entry##*:}"
+                elapsed=$((elapsed + count)); last="$model"
+                [ "$iter" -le "$elapsed" ] && echo "$model" && return
+              else echo "$entry"; return; fi
+            done
+            echo "$last"
+          }
+          field() { grep -m1 "^- \*\*$1\*\*:" "$VAL" 2>/dev/null | sed 's/^[^:]*: *//'; }
+
+          OPT_NAME=$(grep -m1 "^## Optimization ${N}: " "$PLAN" | sed 's/^## Optimization [0-9]*: //' | tr -cd 'A-Za-z0-9_-')
+          OPT_NAME="${OPT_NAME:-opt${N}}"
+          BRANCH="opt/${N}-${OPT_NAME}"
+          echo "OPT_BRANCH=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "OPT_NAME=$OPT_NAME" >> "$GITHUB_OUTPUT"
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: skipping generate/build/gate"
+            echo "GATE_OK=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Branch from the WORK branch (shallow clone has no other refs; ADRs live there).
+          # -f discards any uncommitted tracked changes a prior interrupted dispatch left, so
+          # the cycle never fails to start on (or builds from) a dirty tree (C2); untracked
+          # build outputs are left intact so ccache/the incremental build stay warm.
+          rm -f "$VAL"   # fresh cycle: no stale repair context
+          git -C src checkout -f -B "$BRANCH" "$EXTERNAL_REPO_WORK_BRANCH"
+
+          GATE_OK=false
+          GOLDEN_CAPTURED=false
+          for ITER in $(seq 1 "$PHASE7_MAX_ITERATIONS"); do
+            MODEL=$(resolve_model "$PHASE7_MODEL_SCHEDULE" "$ITER")
+            echo "::group::opt ${N} iteration ${ITER}/${PHASE7_MAX_ITERATIONS} — generate (model ${MODEL})"
+            copilot -p "Work on optimization $N as described in work/7-generate-optimization.md. See integration-test/optimization-plan.md entry $N for this optimization's target. See integration-test/${HARNESS_HOTSPOT_PATH:-reports/profiler-summary.md} for performance data. Do not build or run tests yourself — the pipeline does that." \
+              --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --allow-tool='shell' --deny-tool='shell(git:*)' \
+              --model="$MODEL" --no-ask-user \
+              --share="proof/7-opt-${N}-generation-session-${ITER}.md" \
+              2>&1 | tee "proof/7-opt-${N}-generation-${ITER}.md" || true
+            echo "::endgroup::"
+
+            if [ ! -f "$VAL" ]; then
+              { echo ""; echo "## Build Errors (iteration $ITER)"; echo "OPTIMIZATION-VALIDATION.md was not written by the generation pass."; } >> "$VAL" 2>/dev/null || \
+                printf '## Build Errors (iteration %s)\nOPTIMIZATION-VALIDATION.md was not written by the generation pass.\n' "$ITER" > "$VAL"
+              continue
+            fi
+
+            # --- 7f golden capture: BASE build, once, BEFORE the first build ---
+            if [ "$PHASE7_FUZZ_REQUIRED" != "0" ] && [ "$GOLDEN_CAPTURED" != true ]; then
+              if "$VENV_PY" integration-test/_tools/diff_fuzz.py \
+                  --spec "integration-test/fuzz/opt${N}_fuzz.py" --mode capture \
+                  --golden "integration-test/reports/fuzz-golden-opt${N}.pt"; then
+                GOLDEN_CAPTURED=true
+              else
+                { echo ""; echo "## Correctness Failure (iteration $ITER)";
+                  echo "7f: golden capture on the base build failed — author/repair integration-test/fuzz/opt${N}_fuzz.py per work/7-generate-optimization.md."; } >> "$VAL"
+                continue   # base build preserved for retry (no build ran this iteration)
+              fi
+            fi
+
+            # --- Pre-flight: the 7c unit-test reference must collect >=1 test,
+            # checked on the BASE build BEFORE the expensive incremental build.
+            # A wrong 'Unit test file'/'Unit test pattern' otherwise burns a full
+            # build before 7c fails with pytest exit 5 (no tests collected).
+            # Failing cheap here lets the repair pass fix the reference without a
+            # rebuild (observed: opt 2 wasted an iteration on this exact miss).
+            PF_FILE=$(field 'Unit test file'); PF_PATTERN=$(field 'Unit test pattern')
+            PF_OK=true
+            if [ -z "$PF_PATTERN" ]; then
+              PF_OK=false
+            else
+              case "$PF_FILE" in
+                test/*.py) (cd src && "$VENV_PY" -m pytest "$PF_FILE" -k "$PF_PATTERN" --collect-only -q \
+                              > "$RUNNER_TEMP/collect.txt" 2>&1) || PF_OK=false ;;
+                *) PF_OK=false ;;
+              esac
+            fi
+            if [ "$PF_OK" != true ]; then
+              { echo ""; echo "## Correctness Failure (iteration $ITER)";
+                echo "pre-flight (7c collection): the unit-test reference is invalid or collected no tests on the base build (\`pytest '$PF_FILE' -k '$PF_PATTERN' --collect-only\`). Fix 'Unit test file' (must be \`test/<name>.py\` and exist) and 'Unit test pattern' (a non-empty -k selector matching the changed op) in OPTIMIZATION-VALIDATION.md — verified before the build, so no rebuild is needed to retry.";
+                if [ -f "$RUNNER_TEMP/collect.txt" ]; then echo '```'; tail -20 "$RUNNER_TEMP/collect.txt"; echo '```'; fi; } >> "$VAL"
+              continue
+            fi
+
+            # --- Incremental build (cmd/env/native-source-ext from the harness manifest;
+            # NOT build-source.sh, whose idempotency would skip a rebuild of the
+            # uncommitted optimization edit). Defaults reproduce the editable install. ---
+            BUILD_ENV="${HARNESS_BUILD_ENV:-BUILD_TEST=0 USE_CUDA=0 USE_DISTRIBUTED=0}"
+            BUILD_TMPL="${HARNESS_BUILD_INCREMENTAL_CMD:-$VENV_PY -m pip install --no-build-isolation -v -e .}"
+            BUILD_CMD=${BUILD_TMPL//\{py\}/$VENV_PY}
+            NATIVE_RE=$(printf '%s' "${HARNESS_BUILD_NATIVE_SOURCE_EXT:-cpp cc c h hpp cu}" | tr ' ' '|')
+            ccache -z
+            if ! (cd src && env $BUILD_ENV $BUILD_CMD > "$RUNNER_TEMP/build.txt" 2>&1); then
+              { echo ""; echo "## Build Errors (iteration $ITER)"; echo '```'; tail -80 "$RUNNER_TEMP/build.txt"; echo '```'; } >> "$VAL"
+              continue
+            fi
+            ccache -s > "proof/7-opt-${N}-ccache-${ITER}.txt"
+            # Rebuild verification: native source changed but 0 compiles => edit never reached the build
+            CHANGED=$(git -C src diff --name-only HEAD)
+            COMPILES=$(grep -oP 'Cacheable calls:\s+\K\d+' "proof/7-opt-${N}-ccache-${ITER}.txt" | head -1)
+            if echo "$CHANGED" | grep -qE "\.($NATIVE_RE)\$" && [ "${COMPILES:-0}" = "0" ]; then
+              { echo ""; echo "## Build Errors (iteration $ITER)"; echo "Native source files changed but the build compiled nothing — the edit did not reach the build."; echo "$CHANGED"; } >> "$VAL"
+              continue
+            fi
+
+            # --- Correctness gate 7a-7f (venv interpreter throughout) ---
+            echo "::group::opt ${N} iteration ${ITER} — correctness gate"
+            GATE_OK=true
+
+            # 7a: import + trivial op (command from the harness manifest)
+            "$VENV_PY" -c "${HARNESS_SMOKE_IMPORT_OP_CMD:-import torch; torch.mm(torch.randn(4,4), torch.randn(4,4))}" || GATE_OK=false
+
+            # 7b: integration smoke (non-integer run ID -> writes no run record).
+            # Retried once: a transient harness/env flake recovers on the retry,
+            # a real breakage fails both times — so an env flake does not become a
+            # false FAILED verdict that still auto-chains into Phase 8 (C5).
+            if [ "$GATE_OK" = true ]; then
+              if ! env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=smoke bash integration-test/run.sh; then
+                echo "7b smoke run failed (attempt 1/2) — retrying once to rule out an environment flake"
+                env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=smoke bash integration-test/run.sh || GATE_OK=false
+              fi
+            fi
+
+            # 7c: targeted unit test — structured field, validated path, NO eval.
+            # An empty -k would run the whole file untargeted, so require a
+            # non-empty selector that exercises the changed op (D7).
+            if [ "$GATE_OK" = true ]; then
+              TEST_FILE=$(field 'Unit test file'); TEST_PATTERN=$(field 'Unit test pattern')
+              if [ -z "$TEST_PATTERN" ]; then
+                echo "7c: missing 'Unit test pattern' — provide a non-empty -k selector for the changed op"; GATE_OK=false
+              else
+                case "$TEST_FILE" in
+                  test/*.py) (cd src && "$VENV_PY" -m pytest "$TEST_FILE" -k "$TEST_PATTERN" --tb=short -x) || GATE_OK=false ;;
+                  *) echo "7c: invalid/missing Unit test file: '$TEST_FILE'"; GATE_OK=false ;;
+                esac
+              fi
+            fi
+
+            # 7d: op-suite gate (framework op tests; timeout -> non-fatal SKIP; other failure -> gate failure)
+            if [ "$GATE_OK" = true ]; then
+              OPINFO=$(field 'OpInfo pattern')
+              if [ -n "$OPINFO" ]; then
+                set +e
+                (cd src && timeout 1800 "$VENV_PY" -m pytest "${HARNESS_OP_SUITE_FILE:-test/test_ops.py}" -k "$OPINFO" --tb=short -x); RC=$?
+                set -e
+                if [ "$RC" -eq 124 ]; then echo "7d OpInfo: SKIPPED (timeout, non-fatal)" >> "proof/7-opt-${N}-gate-notes.md";
+                elif [ "$RC" -ne 0 ]; then GATE_OK=false; fi
+              fi
+            fi
+
+            # 7f: differential fuzz — variant vs base golden (PHASE7_PLAN §8)
+            if [ "$GATE_OK" = true ] && [ "$PHASE7_FUZZ_REQUIRED" != "0" ]; then
+              if [ ! -f "integration-test/reports/fuzz-golden-opt${N}.pt" ]; then
+                echo "7f: no golden (capture did not run)"; GATE_OK=false
+              elif ! "$VENV_PY" integration-test/_tools/diff_fuzz.py \
+                  --spec "integration-test/fuzz/opt${N}_fuzz.py" --mode compare \
+                  --golden "integration-test/reports/fuzz-golden-opt${N}.pt" \
+                  --report "integration-test/reports/fuzz-diff-opt${N}.json"; then
+                GATE_OK=false
+              fi
+            fi
+            echo "::endgroup::"
+
+            if [ "$GATE_OK" = true ]; then break; fi
+            { echo ""; echo "## Correctness Failure (iteration $ITER)"; echo "One of gates 7a-7f failed (see job log above)."; } >> "$VAL"
+          done
+
+          echo "GATE_OK=$GATE_OK" >> "$GITHUB_OUTPUT"
+          if [ "$GATE_OK" != true ]; then
+            git -C src add -A
+            git -C src commit -m "opt/${N}: FAILED after ${PHASE7_MAX_ITERATIONS} iterations (WIP, for audit)" || true
+            git -C src checkout "$EXTERNAL_REPO_WORK_BRANCH"
+          fi
+
+      - name: Step 5 — Commit optimization branch
+        if: ${{ steps.genloop.outputs.GATE_OK == 'true' && inputs.dry_run == false }}
+        run: |
+          N=${{ inputs.optimization_index }}
+          git -C src add -A
+          git -C src commit -m "opt/${N}: ${{ steps.genloop.outputs.OPT_NAME }}" || echo "nothing to commit"
+
+      - name: Step 5b — Push optimization branch to the target repo
+        if: ${{ steps.genloop.outputs.GATE_OK == 'true' && inputs.dry_run == false }}
+        env:
+          GITHUB_PUSH_TOKEN: ${{ secrets.PUSH_TOKEN }}
+        run: |
+          # The runner is ephemeral, so the opt branch in src/ is the only place the
+          # agent's change exists — push it to the target repo (EXTERNAL_REPO_URL must be
+          # writable: owned directly or your fork of an upstream) so a maintainer can open
+          # a PR from it. Opening the PR itself stays a manual step. src/ is at HEAD of the
+          # opt branch here (the success path does not check the work branch back out).
+          BRANCH="${{ steps.genloop.outputs.OPT_BRANCH }}"
+          AUTH_URL=$(echo "$EXTERNAL_REPO_URL" | sed "s|https://|https://${GITHUB_PUSH_TOKEN}@|")
+          # Re-dispatching the same index regenerates the branch, so fall back to force.
+          if git -C src push "$AUTH_URL" "HEAD:refs/heads/${BRANCH}" \
+            || git -C src push --force "$AUTH_URL" "HEAD:refs/heads/${BRANCH}"; then
+            echo "Pushed ${BRANCH} to the target repo"
+          else
+            echo "::warning::Failed to push ${BRANCH} to the target repo — the change is stranded on the runner. Check PUSH_TOKEN write access to ${EXTERNAL_REPO_URL}."
+          fi
+
+      - name: Step 6 — B-side measurement (variant)
+        id: bside
+        if: ${{ steps.genloop.outputs.GATE_OK == 'true' && inputs.dry_run == false }}
+        run: |
+          N=${{ inputs.optimization_index }}
+          R=integration-test/reports
+          rm -f "$R/run-records.json"
+          for i in $(seq 1 "$PHASE7_BASELINE_RUNS"); do
+            env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=$i bash integration-test/run.sh
+          done
+          cp "$R/run-records.json" "$R/run-records-opt${N}.json"
+          # A short record set means the test exited 0 but did not write every
+          # run — comparing mismatched N would emit an invalid verdict (A1).
+          CNT=$("$VENV_PY" -c "import json;print(len(json.load(open('$R/run-records-opt${N}.json'))))" 2>/dev/null || echo 0)
+          echo "VARIANT_RUNS=$CNT" >> "$GITHUB_OUTPUT"
+          if [ "$CNT" != "$PHASE7_BASELINE_RUNS" ]; then
+            echo "::error::B-side wrote $CNT/$PHASE7_BASELINE_RUNS run records — recording INCOMPLETE"
+            echo "MEASURE_OK=false" >> "$GITHUB_OUTPUT"
+            echo "MEASURE_NOTE=B-side wrote $CNT/$PHASE7_BASELINE_RUNS run records" >> "$GITHUB_OUTPUT"
+            git -C src checkout "$EXTERNAL_REPO_WORK_BRANCH" || true
+            exit 0
+          fi
+          [ -f "$R/generated-outputs-run1.jsonl" ] && cp "$R/generated-outputs-run1.jsonl" "$R/generated-outputs-opt${N}-variant-run1.jsonl" || true
+          "$VENV_PY" integration-test/_tools/op_microbench.py --plan integration-test/optimization-plan.md \
+            --entry "$N" --min-runtime "$PHASE7_MICROBENCH_MIN_SECONDS" \
+            --output "$R/microbench-opt${N}-variant.json"
+          echo "MEASURE_OK=true" >> "$GITHUB_OUTPUT"
+
+      - name: Step 7 — A-side re-measurement (paired)
+        id: aside
+        if: ${{ steps.genloop.outputs.GATE_OK == 'true' && inputs.dry_run == false && steps.bside.outputs.MEASURE_OK == 'true' }}
+        run: |
+          N=${{ inputs.optimization_index }}
+          R=integration-test/reports
+          BRANCH="${{ steps.genloop.outputs.OPT_BRANCH }}"
+          # A3: if the optimization touched native sources, reverting to the work
+          # branch MUST recompile them; a zero-compile rebuild means the variant
+          # binary is still installed and we would measure it against itself.
+          NATIVE_RE=$(printf '%s' "${HARNESS_BUILD_NATIVE_SOURCE_EXT:-cpp cc c h hpp cu}" | tr ' ' '|')
+          if git -C src diff --name-only "$EXTERNAL_REPO_WORK_BRANCH" "$BRANCH" | grep -qE "\.($NATIVE_RE)\$"; then CPP_CHANGED=yes; else CPP_CHANGED=no; fi
+          git -C src checkout "$EXTERNAL_REPO_WORK_BRANCH"
+          BUILD_ENV="${HARNESS_BUILD_ENV:-BUILD_TEST=0 USE_CUDA=0 USE_DISTRIBUTED=0}"
+          BUILD_TMPL="${HARNESS_BUILD_INCREMENTAL_CMD:-$VENV_PY -m pip install --no-build-isolation -v -e .}"
+          BUILD_CMD=${BUILD_TMPL//\{py\}/$VENV_PY}
+          ccache -z
+          (cd src && env $BUILD_ENV $BUILD_CMD > "$RUNNER_TEMP/base-build.txt" 2>&1)
+          COMPILES=$(ccache -s | grep -oP 'Cacheable calls:\s+\K\d+' | head -1)
+          if [ "$CPP_CHANGED" = yes ] && [ "${COMPILES:-0}" = "0" ]; then
+            echo "::error::A-side rebuild compiled nothing despite native changes — variant binary likely still installed"
+            echo "MEASURE_OK=false" >> "$GITHUB_OUTPUT"
+            echo "MEASURE_NOTE=A-side base rebuild compiled nothing (variant binary likely still installed)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          rm -f "$R/run-records.json"
+          for i in $(seq 1 "$PHASE7_BASELINE_RUNS"); do
+            env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=$i bash integration-test/run.sh
+          done
+          cp "$R/run-records.json" "$R/run-records-base-opt${N}.json"
+          # Both sides must have the full, equal record count before A/B (A1).
+          CNT=$("$VENV_PY" -c "import json;print(len(json.load(open('$R/run-records-base-opt${N}.json'))))" 2>/dev/null || echo 0)
+          if [ "$CNT" != "$PHASE7_BASELINE_RUNS" ] || [ "$CNT" != "${{ steps.bside.outputs.VARIANT_RUNS }}" ]; then
+            echo "::error::A-side wrote $CNT records vs B-side ${{ steps.bside.outputs.VARIANT_RUNS }} (expected $PHASE7_BASELINE_RUNS) — recording INCOMPLETE"
+            echo "MEASURE_OK=false" >> "$GITHUB_OUTPUT"
+            echo "MEASURE_NOTE=A-side wrote $CNT vs B-side ${{ steps.bside.outputs.VARIANT_RUNS }} records" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ -f "$R/generated-outputs-run1.jsonl" ] && cp "$R/generated-outputs-run1.jsonl" "$R/generated-outputs-opt${N}-baseline-run1.jsonl" || true
+          "$VENV_PY" integration-test/_tools/op_microbench.py --plan integration-test/optimization-plan.md \
+            --entry "$N" --min-runtime "$PHASE7_MICROBENCH_MIN_SECONDS" \
+            --output "$R/microbench-opt${N}-baseline.json"
+          echo "MEASURE_OK=true" >> "$GITHUB_OUTPUT"
+
+      - name: Step 8 — A/B comparison (ab_compare v2)
+        if: ${{ steps.genloop.outputs.GATE_OK == 'true' && inputs.dry_run == false && steps.bside.outputs.MEASURE_OK == 'true' && steps.aside.outputs.MEASURE_OK == 'true' }}
+        run: |
+          N=${{ inputs.optimization_index }}
+          R=integration-test/reports
+          MPATH=$(grep -A25 "^## Optimization ${N}: " integration-test/optimization-plan.md \
+            | grep -m1 '^- \*\*Measurement path\*\*:' | sed 's/^[^:]*: *//')
+          "$VENV_PY" integration-test/_tools/ab_compare.py --mode compare \
+            --baseline "$R/run-records-base-opt${N}.json" \
+            --variant  "$R/run-records-opt${N}.json" \
+            --baseline-micro "$R/microbench-opt${N}-baseline.json" \
+            --variant-micro  "$R/microbench-opt${N}-variant.json" \
+            --phase6-baseline "$R/baseline.json" \
+            --measurement-path "${MPATH:-end-to-end}" \
+            --output-prefix "$R/ab-comparison-opt${N}"
+
+      - name: Step 9 — Proof artifact
+        if: ${{ !cancelled() }}
+        env:
+          OPT_INDEX: ${{ inputs.optimization_index }}
+          GATE_OK: ${{ steps.genloop.outputs.GATE_OK }}
+          OPT_NAME: ${{ steps.genloop.outputs.OPT_NAME }}
+          OPT_BRANCH: ${{ steps.genloop.outputs.OPT_BRANCH }}
+          BSIDE_OK: ${{ steps.bside.outputs.MEASURE_OK }}
+          ASIDE_OK: ${{ steps.aside.outputs.MEASURE_OK }}
+          BSIDE_NOTE: ${{ steps.bside.outputs.MEASURE_NOTE }}
+          ASIDE_NOTE: ${{ steps.aside.outputs.MEASURE_NOTE }}
+        run: |
+          mkdir -p proof
+          N="$OPT_INDEX"
+          VERDICT=$("$VENV_PY" -c "import json; d=json.load(open('integration-test/reports/ab-comparison-opt${N}.json')); print(d.get('decision','UNKNOWN')+' (signal: '+str(d.get('decision_signal','-'))+')')" 2>/dev/null || echo "UNKNOWN")
+          [ "$GATE_OK" = "true" ] || VERDICT="FAILED (build/gate not passed)"
+          # A built+gated cycle whose measurement was untrustworthy is INCOMPLETE,
+          # not a verdict — distinct from FAILED so Phase 8 can exclude it from
+          # the verdict ranking rather than read it as a regression (A1/A3).
+          if [ "$GATE_OK" = "true" ]; then
+            if [ "$BSIDE_OK" = "false" ]; then VERDICT="INCOMPLETE (${BSIDE_NOTE:-B-side measurement not trustworthy})";
+            elif [ "$ASIDE_OK" = "false" ]; then VERDICT="INCOMPLETE (${ASIDE_NOTE:-A-side measurement not trustworthy})"; fi
+          fi
+          {
+            echo "# Optimization $N Complete"
+            echo ""
+            echo "Name: ${OPT_NAME}"
+            echo "Branch: ${OPT_BRANCH}"
+            echo "Gate OK: ${GATE_OK}"
+            echo "Verdict: ${VERDICT}"
+            echo ""
+            echo "Details: integration-test/reports/ab-comparison-opt${N}.md"
+          } > "proof/7-opt-${N}-complete.md"
+
+      - name: Commit outer-repo artifacts
+        if: ${{ !cancelled() }}
+        run: |
+          git add proof/ integration-test/reports/ integration-test/optimization-plan.md \
+            integration-test/OPTIMIZATION-VALIDATION.md integration-test/fuzz/ 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "Phase 7: optimization ${{ inputs.optimization_index }} complete"
+          git push || echo "push skipped/failed (non-fatal)"
+
+      - name: Step 10 — Auto-chain next cycle or trigger Phase 8
+        # Chain after a FAILED optimization (D12), but NOT after a prerequisite-gate
+        # failure: the prereq gate (src/ + .venv + source build + v2 baseline) is
+        # environment-invariant, so every subsequent cycle would fail identically in
+        # ~20s (a self-perpetuating no-op loop). Stop the chain instead — fix the
+        # environment (re-run the pipeline through Phase 6) and re-dispatch index 1.
+        if: ${{ !cancelled() && steps.prereq.outcome != 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          N=${{ inputs.optimization_index }}
+          if [ "$N" -lt "$TOTAL_OPTIMIZATIONS" ]; then
+            echo "Chaining to optimization $((N + 1)) / $TOTAL_OPTIMIZATIONS"
+            gh workflow run phase-7-optimize.yml --ref "${{ github.ref }}" \
+              -f optimization_index=$((N + 1)) -f total_optimizations="$TOTAL_OPTIMIZATIONS" \
+              -f dry_run=${{ inputs.dry_run }}
+          else
+            echo "Last cycle complete — triggering Phase 8 aggregate report"
+            gh workflow run phase-8-report.yml --ref "${{ github.ref }}" \
+              -f dry_run=${{ inputs.dry_run }}
+          fi

@@ -1,0 +1,458 @@
+name: 'Phase 5+6 — Source Build + Baseline Execution'
+
+# Reusable: called by codeweave.yml. Phases 5 (build src/ from source, ccache)
+# and 6 (baseline measurement) run in ONE job because they share the workspace:
+# the baseline uses the editable .venv produced by the build, which is not
+# committed to git and would be destroyed by re-cloning src/. The build step is
+# skipped when resuming directly at the baseline (start_from_phase == '6'),
+# which then relies on a .venv persisted on the same runner.
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+      start_from_phase:
+        type: string
+        default: '1'
+    outputs:
+      source_build_complete:
+        value: ${{ jobs.phase-5-6-build-baseline.outputs.source_build_complete }}
+      baseline_complete:
+        value: ${{ jobs.phase-5-6-build-baseline.outputs.baseline_complete }}
+
+permissions:
+  contents: write
+
+jobs:
+  phase-5-6-build-baseline:
+    name: 'Phase 5+6: Source Build + Baseline Execution'
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      source_build_complete: ${{ steps.build_source.outputs.source_build_complete }}
+      baseline_complete: ${{ steps.execute.outputs.baseline_complete }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+      - uses: ./.github/actions/codeweave-setup
+        with:
+          dry_run: ${{ inputs.dry_run }}
+      - name: ccache environment
+        run: |
+          {
+            echo "CCACHE_DIR=${HOME}/.ccache-codeweave"
+            echo "CCACHE_MAXSIZE=15G"
+            echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          } >> "$GITHUB_ENV"
+      - name: Check Phase 6 prerequisites
+        run: |
+          if [ "${DRY_RUN}" = "true" ] && [ ! -f "integration-test/tests-complete.md" ]; then
+            echo "DRY RUN: creating stub integration-test/tests-complete.md to satisfy prerequisite"
+            mkdir -p integration-test
+            printf "# Integration Test Code Complete\n\nGate passed: dry-run\n" > integration-test/tests-complete.md
+          fi
+          if [ ! -f "integration-test/tests-complete.md" ]; then
+            echo "ERROR: integration-test/tests-complete.md not found — Phase 4 must complete before Phase 6"
+            exit 1
+          fi
+
+      - name: Clone external repository into src
+        if: ${{ inputs.dry_run == false }}   # dry-run stubs the build/baseline; nothing uses src/
+        run: |
+          rm -rf src tools
+          # --recurse-submodules: the build needs third_party/; fetch it deterministically
+          # from .gitmodules rather than relying on build-source.sh to derive the step from
+          # CONTRIBUTING.md. --shallow-submodules matches the --depth 1 superproject (this
+          # job re-clones from scratch every run, so bandwidth matters).
+          git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$EXTERNAL_REPO_WORK_BRANCH" "$EXTERNAL_REPO_URL" src 2>/dev/null \
+            || git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$EXTERNAL_REPO_BRANCH" "$EXTERNAL_REPO_URL" src
+          git -C src config user.name "$GIT_USER_NAME"
+          git -C src config user.email "$GIT_USER_EMAIL"
+          echo "src/" >> .git/info/exclude
+          echo "tools/" >> .git/info/exclude
+          # B6: name the branch/commit actually checked out, and warn loudly if the
+          # work-branch clone failed and we fell back to the source branch — that
+          # build would NOT contain the work-branch ADR/harness commits, silently
+          # mismatching baseline vs optimization.
+          BUILT_BRANCH=$(git -C src rev-parse --abbrev-ref HEAD)
+          echo "src/ cloned on branch '${BUILT_BRANCH}' at $(git -C src rev-parse HEAD)"
+          if [ "$BUILT_BRANCH" != "$EXTERNAL_REPO_WORK_BRANCH" ]; then
+            echo "::warning::src/ is on '${BUILT_BRANCH}', not the work branch '${EXTERNAL_REPO_WORK_BRANCH}' — the work-branch clone failed and the source branch was used as a fallback. The build will not contain work-branch ADR/harness commits."
+          fi
+
+      - name: Ensure Python venv support
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          # Phase 5/6 build and run everything through integration-test/.venv. On a
+          # freshly provisioned self-hosted runner the distro python may lack the venv
+          # module (Debian/Ubuntu split it into pythonX.Y-venv), which would only
+          # surface as a confusing setup.sh/build-source.sh failure. Probe it here and
+          # install on apt-based runners; on others, fail with a clear message.
+          PYTHON_BIN="$(command -v python3)"
+          PYTHON_VERSION="$("${PYTHON_BIN}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+          echo "Using $("${PYTHON_BIN}" --version) at ${PYTHON_BIN}"
+          if "${PYTHON_BIN}" -m venv /tmp/codeweave-venv-probe; then
+            rm -rf /tmp/codeweave-venv-probe
+            echo "python3 venv support is available"
+            exit 0
+          fi
+          rm -rf /tmp/codeweave-venv-probe
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::python3 venv support is unavailable and apt-get is not installed"
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "::error::python3 venv support is unavailable and sudo is not installed"
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          ${SUDO} apt-get update
+          ${SUDO} apt-get install -y "python${PYTHON_VERSION}-venv" || ${SUDO} apt-get install -y python3-venv
+          "${PYTHON_BIN}" -m venv /tmp/codeweave-venv-probe
+          rm -rf /tmp/codeweave-venv-probe
+          echo "python3 venv support is available"
+
+      - name: Load harness toolchain manifest
+        run: |
+          # Surface integration-test/harness-manifest.json toolchain values
+          # (venv layout, profiler enable-env, …) into $GITHUB_ENV for the
+          # build/baseline steps. Defaults reproduce the built-in toolchain
+          # when the manifest is absent.
+          node .github/scripts/load-harness-manifest.js
+
+      - name: Phase 5 — Build target from source
+        id: build_source
+        if: inputs.start_from_phase != '6'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof integration-test/reports
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: skipping Phase 5 source build"
+            printf "# Source Build Report\n\nDate: dry-run\nStatus: SUCCESS (dry-run stub)\n" \
+              > integration-test/reports/build-source.md
+          else
+            # Copilot AUTHORS integration-test/build-source.sh (read/write/edit only —
+            # no shell needed); the workflow EXECUTES it directly so build output
+            # streams into the job log and no tool permissions can block the build.
+            VENV_PY="$PWD/integration-test/${HARNESS_VENV_PYTHON:-.venv/bin/python}"
+            BUILD_OK=false
+            for ATTEMPT in $(seq 1 "${PHASE5_MAX_ITERATIONS}"); do
+              if [ -f integration-test/build-error.md ]; then MODE=repair; else MODE=author; fi
+              echo "::group::Phase 5 — Copilot ${MODE} pass (attempt ${ATTEMPT})"
+              copilot -p "Work on the task described in work/5-build-source.md. Author (or repair) integration-test/build-source.sh and update integration-test/setup.sh. Do not run the build yourself — the pipeline executes the script." \
+                --allow-tool='read' \
+                --allow-tool='write' \
+                --allow-tool='edit' \
+                --allow-tool='create' \
+                --allow-tool='shell' \
+                --deny-tool='shell(git:*)' \
+                --model="${PHASE5_MODEL}" \
+                --no-ask-user \
+                --share="proof/5-build-source-session-${ATTEMPT}.md" \
+                2>&1 | tee "proof/5-build-source-${ATTEMPT}.md"
+              echo "::endgroup::"
+
+              if [ ! -f integration-test/build-source.sh ]; then
+                echo "build-source.sh was not written by the ${MODE} pass" > integration-test/build-error.md
+                continue
+              fi
+
+              echo "::group::Phase 5 — Build (attempt ${ATTEMPT}, output is live)"
+              BUILD_START=$(date +%s)
+              if bash -o pipefail -c "bash integration-test/build-source.sh 2>&1 | tee proof/5-build-output-${ATTEMPT}.log"; then
+                echo "::endgroup::"
+                DURATION_MIN=$(( ($(date +%s) - BUILD_START) / 60 ))
+                # build-source.sh exits 0 only after its OWN from-source validation
+                # (installed build == src HEAD) or an idempotency skip that confirms the
+                # same — so a clean exit IS the success gate. No re-validation here, which
+                # keeps this phase toolchain-agnostic; version details are in the build log.
+                {
+                  echo "# Source Build Report"
+                  echo ""
+                  echo "Date: $(date +%Y-%m-%d)"
+                  echo "Status: SUCCESS"
+                  echo ""
+                  echo "Build duration: ${DURATION_MIN} min (attempt ${ATTEMPT})"
+                  echo "src HEAD: $(git -C src rev-parse HEAD)"
+                  echo ""
+                  echo "Build log: proof/5-build-output-${ATTEMPT}.log"
+                  echo "Discovery details: integration-test/reports/build-discovery.md"
+                } > integration-test/reports/build-source.md
+                BUILD_OK=true
+                break
+              else
+                echo "::endgroup::"
+                {
+                  echo "# Build Error — Attempt ${ATTEMPT}"
+                  echo ""
+                  echo '```'
+                  tail -100 "proof/5-build-output-${ATTEMPT}.log"
+                  echo '```'
+                } > integration-test/build-error.md
+              fi
+            done
+
+            if [ "$BUILD_OK" != true ]; then
+              printf "# Source Build Report\n\nDate: %s\nStatus: FAILED\n\nAll %s attempt(s) exhausted — see proof/5-build-output-*.log.\n" \
+                "$(date +%Y-%m-%d)" "${PHASE5_MAX_ITERATIONS}" > integration-test/reports/build-source.md
+            else
+              rm -f integration-test/build-error.md
+            fi
+          fi
+
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Phase 5: source build"
+          fi
+
+          # Gate: baseline measurement on a wheel install is invalid for A/B (D1)
+          if grep -q "Status: FAILED" integration-test/reports/build-source.md; then
+            echo "ERROR: source build FAILED — see integration-test/reports/build-source.md"
+            exit 1
+          fi
+          # Past the gate ⇒ the build succeeded (or dry-run stub); surface it for finalize
+          echo "source_build_complete=1" >> "$GITHUB_OUTPUT"
+
+      - name: Phase 5 lint generated build scripts
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: skipping shell lint gate"
+            exit 0
+          fi
+          # setup.sh is authored in Phase 3, edited in Phase 5, then run raw by
+          # Phase 6. A reference to an unassigned variable is fatal under `set -u`
+          # — e.g. an unescaped ${VAR} inside a double-quoted `python3 -c "..."`
+          # heredoc, which bash expands before the interpreter ever runs. The
+          # Phase 4 `bash -n` gate can't catch this: it's a runtime error, not a
+          # syntax error, and that gate also runs before Phase 5 touches setup.sh.
+          # Catch it here, before Phase 6 spends minutes building only to die in
+          # `bash integration-test/setup.sh`.
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo -n apt-get install -y shellcheck >/dev/null 2>&1 || true
+          fi
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            echo "::warning::shellcheck unavailable — skipping unbound-variable lint gate. Install shellcheck on the runner to enable it."
+            exit 0
+          fi
+          FAIL=0
+          for script in setup.sh build-source.sh run.sh; do
+            f="integration-test/${script}"
+            [ -f "$f" ] || continue
+            # SC2154 = "referenced but never assigned" — the unbound-variable
+            # class that crashes under `set -u`. `-o check-unassigned-uppercase`
+            # is REQUIRED: by default shellcheck assumes ALL_CAPS names come from
+            # the environment and stays silent, so without it SC2154 never fires
+            # on the names these scripts use (PY_VER, TORCH_VER, ...). Grep SC2154
+            # only, so stylistic notes (SC2086, SC2015) never block the pipeline.
+            HITS=$(shellcheck -o check-unassigned-uppercase -f gcc "$f" 2>/dev/null | grep "SC2154" || true)
+            if [ -n "$HITS" ]; then
+              echo "ERROR: $f references a variable that is never assigned (shellcheck SC2154):"
+              echo "$HITS"
+              FAIL=1
+            fi
+          done
+          if [ "$FAIL" -ne 0 ]; then
+            echo "Phase 5 produced a shell script with an unbound-variable reference (see above)."
+            echo "This would crash Phase 6 under 'set -u'. Fix the reference — escape"
+            echo "embedded-language placeholders as \${...} or give a default \${VAR:-...} —"
+            echo "then regenerate/re-run."
+            exit 1
+          fi
+          echo "Shell lint gate passed: no unbound-variable references in generated scripts"
+
+      - name: Phase 6 baseline execution
+        id: execute
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof integration-test/reports
+
+          REPAIR_PROMPT="Work on the task described in work/6-repair-tests.md. The runtime error from the failed test run is documented in integration-test/repair-error.md."
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY RUN: skipping Phase 6 execution"
+            printf "# Baseline Execution Complete\n\nDate: dry-run\nRuns completed: 0 / ${PHASE6_BASELINE_RUNS} (dry-run)\n" \
+              > integration-test/reports/baseline-complete.md
+          else
+            # Step 1: Build execution environment
+            echo "::group::Phase 6 — Build environment"
+            bash integration-test/setup.sh
+            echo "::endgroup::"
+
+            # Step 2: Repair loop — verify the test runs clean before baseline collection
+            echo "::group::Phase 6 — Repair loop (up to ${PHASE6_MAX_REPAIR_ITERATIONS} repair pass(es))"
+            for r in $(seq 0 "${PHASE6_MAX_REPAIR_ITERATIONS}"); do
+              echo "Probe run $((r + 1))..."
+              # Non-integer run ID: the test only appends to run-records.json for
+              # integer IDs, so probe runs never contaminate the baseline statistics
+              if BASELINE_RUN_ID=probe bash integration-test/run.sh > /tmp/phase6_probe.txt 2>&1; then
+                echo "Probe run clean — harness verified"
+                break
+              fi
+
+              if [ "$r" -ge "${PHASE6_MAX_REPAIR_ITERATIONS}" ]; then
+                echo "Repair loop exhausted after ${PHASE6_MAX_REPAIR_ITERATIONS} repair pass(es) — proceeding with errors noted"
+                break
+              fi
+
+              REPAIR_NUM=$((r + 1))
+              {
+                echo "# Test Execution Error — Repair Pass ${REPAIR_NUM}"
+                echo ""
+                printf '```\n'
+                tail -200 /tmp/phase6_probe.txt
+                printf '```\n'
+              } > integration-test/repair-error.md
+
+              echo "Probe failed — invoking repair agent (pass ${REPAIR_NUM})..."
+              copilot -p "$REPAIR_PROMPT" \
+                --allow-tool='read' \
+                --allow-tool='write' \
+                --allow-tool='edit' \
+                --allow-tool='shell' \
+                --deny-tool='shell(git:*)' \
+                --model="${PHASE6_MODEL}" \
+                --no-ask-user \
+                --share="proof/6-repair-session-${REPAIR_NUM}.md" \
+                2>&1 | tee "proof/6-repair-${REPAIR_NUM}.md"
+
+              git add -A
+              if ! git diff --cached --quiet; then
+                git commit -m "Phase 6: repair pass ${REPAIR_NUM}"
+              else
+                echo "Repair pass ${REPAIR_NUM}: no changes made by repair agent"
+              fi
+            done
+            rm -f integration-test/repair-error.md
+            echo "::endgroup::"
+
+            # Steps 3–6: DETERMINISTIC baseline collection. Baseline measurement is
+            # plain CI logic, not an agentic path: deterministic, reproducible, and not
+            # subject to a memory-pressure cancellation in the agent tail. Copilot is
+            # kept for repair only (the loop above). The benchmark test appends its own
+            # v2 record (iterations, median_iter_ms, energy) per integer BASELINE_RUN_ID;
+            # the pipeline never writes run-records.json itself.
+            R=integration-test/reports
+            VENV_PY="$PWD/integration-test/${HARNESS_VENV_PYTHON:-.venv/bin/python}"
+
+            # Clear run records before the measurement block: the test appends, and
+            # stale/probe-era records would contaminate the baseline statistics (D11)
+            rm -f "$R/run-records.json"
+
+            echo "::group::Phase 6 — Baseline runs (${PHASE6_BASELINE_RUNS})"
+            FAILED=0
+            for i in $(seq 1 "${PHASE6_BASELINE_RUNS}"); do
+              echo "Baseline run ${i}/${PHASE6_BASELINE_RUNS}"
+              if BASELINE_RUN_ID="$i" bash integration-test/run.sh > "proof/6-baseline-run-${i}.log" 2>&1; then
+                echo "  run ${i}: ok"
+              else
+                echo "  run ${i}: FAILED (see proof/6-baseline-run-${i}.log)"   # non-fatal, counted
+                FAILED=$((FAILED + 1))
+              fi
+            done
+            echo "::endgroup::"
+
+            # A short record set means a run exited 0 without writing its record
+            # (or some runs failed): the baseline would be computed on fewer
+            # samples than intended. Treat it as a baseline failure and write the
+            # error stub so Phase 7 is blocked (A1); skip ab_compare.
+            CNT=$("$VENV_PY" -c "import json;print(len(json.load(open('$R/run-records.json'))))" 2>/dev/null || echo 0)
+            BASELINE_INCOMPLETE=0
+            if [ "$CNT" != "${PHASE6_BASELINE_RUNS}" ]; then
+              BASELINE_INCOMPLETE=1
+              echo "::error::Phase 6 collected ${CNT}/${PHASE6_BASELINE_RUNS} run records — baseline incomplete; writing error stub so Phase 7 is blocked"
+              printf '{"schema": "v2", "error": "incomplete baseline: %s/%s runs collected", "n": %s}\n' "$CNT" "${PHASE6_BASELINE_RUNS}" "$CNT" > "$R/baseline.json"
+              {
+                echo "# Baseline Execution Complete"
+                echo ""
+                echo "Date: $(date +%Y-%m-%d)"
+                echo "Runs completed: ${CNT} / ${PHASE6_BASELINE_RUNS} (${FAILED} run(s) failed)"
+                echo ""
+                echo "## Notes"
+                echo ""
+                echo "Baseline INCOMPLETE — fewer records than requested. v2 statistics not computed; Phase 7 will refuse this baseline."
+              } > "$R/baseline-complete.md"
+            fi
+
+            # Step 4: v2 statistics — ab_compare.py --mode baseline writes baseline.json,
+            # baseline-summary.md AND baseline-complete.md into the reports dir, all on
+            # per-iteration metrics (D7). Run with the venv interpreter, not system python.
+            if [ "$BASELINE_INCOMPLETE" = 0 ]; then
+            echo "::group::Phase 6 — Baseline statistics (ab_compare v2)"
+            if "$VENV_PY" integration-test/_tools/ab_compare.py --mode baseline \
+                --runs "$R/run-records.json" --output-dir "$R"; then
+              echo "ab_compare baseline analysis complete"
+            else
+              echo "WARNING: ab_compare --mode baseline failed — writing a fallback marker so the failure is visible and the phase gate still has a marker"
+              [ -f "$R/baseline.json" ] || printf '{"schema": "v2", "error": "ab_compare baseline failed", "n": 0}\n' > "$R/baseline.json"
+              {
+                echo "# Baseline Execution Complete"
+                echo ""
+                echo "Date: $(date +%Y-%m-%d)"
+                echo "Runs completed: see proof/6-baseline-run-*.log (${FAILED} run(s) failed)"
+                echo ""
+                echo "## Notes"
+                echo ""
+                echo "ab_compare.py --mode baseline FAILED — v2 statistics unavailable. See the job log."
+              } > "$R/baseline-complete.md"
+            fi
+            echo "::endgroup::"
+            fi
+
+            # Step 5: tracing pass — non-integer BASELINE_RUN_ID=trace means the test
+            # writes no run record (D11), so the profiler run cannot pollute the baseline
+            # and no snapshot/restore is needed. py-spy flamegraph is best-effort.
+            echo "::group::Phase 6 — Tracing pass (best-effort)"
+            if env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=1" BASELINE_RUN_ID=trace bash integration-test/run.sh > proof/6-trace.log 2>&1; then
+              echo "Tracing pass complete"
+            else
+              echo "Tracing pass failed (non-fatal) — see proof/6-trace.log"
+            fi
+            echo "::endgroup::"
+          fi
+
+          if [ -f "integration-test/reports/baseline-complete.md" ]; then
+            echo "baseline_complete=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "baseline_complete=0" >> "$GITHUB_OUTPUT"
+            echo "WARNING: integration-test/reports/baseline-complete.md not written — execution may have failed"
+          fi
+
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Phase 6: baseline execution results"
+          fi
+
+      - name: Push Phase 6 changes
+        id: push-phase-6
+        if: always()              # push even when Phase 5 or 6 fails so committed artifacts reach the remote
+        continue-on-error: true   # a push that errors in the memory-pressured tail must not
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"   # mask whether commits actually landed
+
+      - name: Verify Phase 6 push
+        if: ${{ always() && inputs.dry_run == false }}
+        run: |
+          # The observed failure mode: the job is marked cancelled in the tail even
+          # though commits already reached the remote. Confirm remote == local HEAD
+          # instead of trusting the push step's exit status.
+          LOCAL_HEAD="$(git rev-parse HEAD)"
+          REMOTE_HEAD="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          if [ "$LOCAL_HEAD" = "$REMOTE_HEAD" ]; then
+            echo "Phase 6 changes are present on origin/${GITHUB_REF_NAME}: ${LOCAL_HEAD}"
+            exit 0
+          fi
+          echo "ERROR: Phase 6 changes were not pushed to origin/${GITHUB_REF_NAME}"
+          echo "Local HEAD:  ${LOCAL_HEAD}"
+          echo "Remote HEAD: ${REMOTE_HEAD:-<missing>}"
+          exit 1

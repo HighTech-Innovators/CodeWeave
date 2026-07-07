@@ -1,0 +1,292 @@
+name: 'Phase 4 — Integration Test Generation'
+
+# Reusable: called by codeweave.yml. Generate test code + smoke gate + validate;
+# only the validator writes integration-test/tests-complete.md.
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+    outputs:
+      tests_complete:
+        value: ${{ jobs.phase-4-tests.outputs.tests_complete }}
+      iterations_run:
+        value: ${{ jobs.phase-4-tests.outputs.iterations_run }}
+
+permissions:
+  contents: write
+
+jobs:
+  phase-4-tests:
+    name: 'Phase 4: Integration Test Generation'
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      tests_complete:  ${{ steps.iterations.outputs.tests_complete }}
+      iterations_run:  ${{ steps.iterations.outputs.iterations_run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.ref }}
+      - uses: ./.github/actions/codeweave-setup
+        with:
+          dry_run: ${{ inputs.dry_run }}
+      - name: Clone external repository into src
+        run: |
+          rm -rf src tools
+          git clone --depth 1 --branch "$EXTERNAL_REPO_WORK_BRANCH" "$EXTERNAL_REPO_URL" src
+          git -C src config user.name "$GIT_USER_NAME"
+          git -C src config user.email "$GIT_USER_EMAIL"
+          echo "src/" >> .git/info/exclude
+          echo "tools/" >> .git/info/exclude
+
+      - name: Check Phase 4 prerequisites
+        run: |
+          if [ "${DRY_RUN}" = "true" ] && [ ! -f "integration-test/harness-complete.md" ]; then
+            echo "DRY RUN: creating stub integration-test/harness-complete.md to satisfy prerequisite"
+            mkdir -p integration-test
+            echo "# harness-complete (dry-run stub)" > integration-test/harness-complete.md
+          elif [ ! -f "integration-test/harness-complete.md" ]; then
+            echo "ERROR: integration-test/harness-complete.md not found — Phase 3 must complete successfully before Phase 4"
+            exit 1
+          fi
+          echo "Prerequisites satisfied: integration-test/harness-complete.md found"
+
+      - name: Phase 4 iterations
+        id: iterations
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          mkdir -p proof integration-test
+
+          resolve_model() {
+            local schedule="$1" iter="$2" elapsed=0 last=""
+            IFS=',' read -ra entries <<< "$schedule"
+            for entry in "${entries[@]}"; do
+              entry="${entry// /}"
+              if [[ "$entry" == *":"* ]]; then
+                local model="${entry%%:*}" count="${entry##*:}"
+                elapsed=$((elapsed + count)); last="$model"
+                [ "$iter" -le "$elapsed" ] && echo "$model" && return
+              else
+                echo "$entry"; return
+              fi
+            done
+            echo "$last"
+          }
+
+          run_smoke_tests() {
+            local integration_dir="integration-test"
+            local report_file="${integration_dir}/smoke-test-report.md"
+            local passed=1
+
+            # Load the harness toolchain manifest (defaults reproduce the
+            # built-in toolchain). The manifest is written by the generate pass that ran
+            # earlier in this same step, so it cannot come from $GITHUB_ENV —
+            # eval it here. An absent/partial manifest falls back to defaults.
+            eval "$(node .github/scripts/load-harness-manifest.js "${integration_dir}/harness-manifest.json")"
+
+            echo "# Smoke Test Report" > "$report_file"
+            echo "" >> "$report_file"
+
+            echo "## Source syntax check" >> "$report_file"
+            # Glob by manifest source dirs + extension.
+            SRC_DIRS=""
+            for d in $HARNESS_SMOKE_SOURCE_DIRS; do SRC_DIRS="$SRC_DIRS ${integration_dir}/${d}"; done
+            SRC_FILES=$(find $SRC_DIRS -name "*.${HARNESS_SMOKE_SOURCE_EXT}" 2>/dev/null | tr '\n' ' ' || true)
+            if [ -z "${SRC_FILES// }" ]; then
+              echo "SKIP: no source files found yet" >> "$report_file"
+            else
+              if $HARNESS_SMOKE_COMPILE_CMD $SRC_FILES 2>/tmp/ow_compile_err; then
+                echo "PASS: all source files compile cleanly" >> "$report_file"
+              else
+                echo "FAIL:" >> "$report_file"
+                echo '```' >> "$report_file"
+                cat /tmp/ow_compile_err >> "$report_file"
+                echo '```' >> "$report_file"
+                passed=0
+              fi
+            fi
+            echo "" >> "$report_file"
+
+            echo "## Shell syntax check" >> "$report_file"
+            for script in $HARNESS_SMOKE_SCRIPTS; do
+              if [ -f "${integration_dir}/${script}" ]; then
+                if $HARNESS_SMOKE_SCRIPT_SYNTAX_CMD "${integration_dir}/${script}" 2>/tmp/ow_script_err; then
+                  echo "PASS: ${script}" >> "$report_file"
+                else
+                  echo "FAIL: ${script}" >> "$report_file"
+                  echo '```' >> "$report_file"
+                  cat /tmp/ow_script_err >> "$report_file"
+                  echo '```' >> "$report_file"
+                  passed=0
+                fi
+              else
+                echo "SKIP: ${script} not found yet" >> "$report_file"
+              fi
+            done
+            echo "" >> "$report_file"
+
+            echo "## Test discovery" >> "$report_file"
+            if [ -d "${integration_dir}/tests" ]; then
+              TESTS_DIR="${integration_dir}/tests"
+              COLLECT_CMD=$(printf '%s' "$HARNESS_SMOKE_COLLECT_CMD" | sed "s#{tests_dir}#\"$TESTS_DIR\"#")
+              if eval "$COLLECT_CMD" > /tmp/ow_collect 2>&1; then
+                ERRORS=$(grep -E "$HARNESS_SMOKE_COLLECT_ERROR_PATTERN" /tmp/ow_collect || true)
+                if [ -n "$ERRORS" ]; then
+                  echo "FAIL: collection errors:" >> "$report_file"
+                  echo '```' >> "$report_file"
+                  echo "$ERRORS" >> "$report_file"
+                  echo '```' >> "$report_file"
+                  passed=0
+                else
+                  echo "PASS: all tests collected without errors" >> "$report_file"
+                fi
+              else
+                CONTENT=$(cat /tmp/ow_collect)
+                if echo "$CONTENT" | grep -qE "$HARNESS_SMOKE_COLLECT_IMPORT_ERROR_PATTERN"; then
+                  echo "FAIL: import error during collection:" >> "$report_file"
+                  echo '```' >> "$report_file"
+                  echo "${CONTENT:0:2000}" >> "$report_file"
+                  echo '```' >> "$report_file"
+                  passed=0
+                else
+                  echo "SKIP: test collection unavailable or inconclusive" >> "$report_file"
+                fi
+              fi
+            else
+              echo "SKIP: tests/ directory not found yet" >> "$report_file"
+            fi
+            echo "" >> "$report_file"
+
+            if [ "$passed" -eq 1 ]; then
+              echo "## Overall: PASS" >> "$report_file"
+            else
+              echo "## Overall: FAIL" >> "$report_file"
+            fi
+
+            return $((1 - passed))
+          }
+
+          TESTS_PROMPT="Work on the task described in work/4-generate-tests.md and constraints/project.md. Read integration-test/AGENTS.md for operating rules, integration-test/SOURCE-UNDER-INVESTIGATION.md for target context, and integration-test/WORK.md for the task checklist. Generate all code files and scripts. Do not run tests or install packages."
+          TESTS_VALIDATE_PROMPT="Validate the integration test code as described in work/4-validate-tests.md and constraints/project.md. Do not modify integration-test/AGENTS.md, integration-test/SOURCE-UNDER-INVESTIGATION.md, integration-test/WORK.md, or any generated test files."
+
+          TESTS_COMPLETE=0
+          k=0
+
+          for k in $(seq 1 "$PHASE4_MAX_ITERATIONS"); do
+            CURRENT_MODEL=$(resolve_model "$PHASE4_MODEL_SCHEDULE" "$k")
+
+            if [ -f "integration-test/tests-complete.md" ]; then
+              rm "integration-test/tests-complete.md"
+              echo "WARNING: Removed stale tests-complete.md before run $k — only the validator may write this file" | tee -a "proof/4-tests-generation-$k.md"
+            fi
+
+            echo "::group::Iteration $k / ${PHASE4_MAX_ITERATIONS} — Generate"
+            echo "## Tests Run $k [generate]" | tee "proof/4-tests-generation-$k.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/4-tests-generation-$k.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot tests generate" | tee -a "proof/4-tests-generation-$k.md"
+            else
+              copilot -p "$TESTS_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/4-tests-generation-session-$k.md" \
+                2>&1 | tee -a "proof/4-tests-generation-$k.md"
+              test ${PIPESTATUS[0]} -eq 0
+            fi
+
+            bash .github/scripts/clean-nested-git.sh   # drop any nested .git an agent created under integration-test/
+            git add -A
+            if git diff --cached --quiet; then
+              echo "No test code changes in run $k" | tee -a "proof/4-tests-generation-$k.md"
+              git commit -m "Phase 4: record test generation run $k"
+            else
+              git commit -m "Phase 4: test generation run $k"
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Iteration $k / ${PHASE4_MAX_ITERATIONS} — Smoke tests"
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping smoke tests" | tee -a "proof/4-tests-generation-$k.md"
+              SMOKE_PASSED=1
+            else
+              if run_smoke_tests; then
+                SMOKE_PASSED=1
+                echo "Smoke tests PASSED for iteration $k" | tee -a "proof/4-tests-generation-$k.md"
+              else
+                SMOKE_PASSED=0
+                echo "Smoke tests FAILED for iteration $k — errors in integration-test/smoke-test-report.md" | tee -a "proof/4-tests-generation-$k.md"
+              fi
+              bash .github/scripts/clean-nested-git.sh   # drop any nested .git an agent created under integration-test/
+              git add -A
+              if ! git diff --cached --quiet; then
+                git commit -m "Phase 4: smoke test results run $k"
+              fi
+            fi
+            echo "::endgroup::"
+
+            if [ "$SMOKE_PASSED" -eq 0 ] && [ "$k" -lt "$PHASE4_MAX_ITERATIONS" ]; then
+              echo "Skipping AI validator for iteration $k — smoke tests failed; errors will inform next generate pass"
+              continue
+            fi
+
+            # Remove __pycache__ created by the smoke test step so the validator's
+            # Check 2 (no runtime artifacts under integration-test/) passes cleanly.
+            find integration-test -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+            bash .github/scripts/clean-nested-git.sh   # drop any nested .git an agent created under integration-test/
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "Phase 4: clean __pycache__ before validation run $k"
+            fi
+
+            echo "::group::Iteration $k / ${PHASE4_MAX_ITERATIONS} — Validate"
+            echo "## Tests Run $k [validate]" | tee "proof/4-tests-validation-$k.md"
+            echo "Model: $CURRENT_MODEL" | tee -a "proof/4-tests-validation-$k.md"
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY RUN: skipping copilot tests validate" | tee -a "proof/4-tests-validation-$k.md"
+            else
+              copilot -p "$TESTS_VALIDATE_PROMPT" \
+                --allow-all-tools \
+                --deny-tool='shell(git:*)' \
+                --model="$CURRENT_MODEL" \
+                --no-ask-user \
+                --share="proof/4-tests-validation-session-$k.md" \
+                2>&1 | tee -a "proof/4-tests-validation-$k.md"
+            fi
+
+            [ -f "integration-test/TESTS-VALIDATION.md" ] && cp "integration-test/TESTS-VALIDATION.md" "proof/4-tests-validation-report-$k.md"
+
+            if [ "${DRY_RUN}" = "true" ] && [ "$k" -eq 1 ]; then
+              mkdir -p integration-test
+              touch integration-test/tests-complete.md
+            fi
+
+            bash .github/scripts/clean-nested-git.sh   # drop any nested .git an agent created under integration-test/
+            git add -A
+            if git diff --cached --quiet; then
+              git commit -m "Phase 4: record test validation run $k"
+            else
+              git commit -m "Phase 4: test validation run $k"
+            fi
+            echo "::endgroup::"
+
+            if [ -f "integration-test/tests-complete.md" ]; then
+              echo "Integration test code complete after run $k — stopping Phase 4" | tee -a "proof/4-tests-validation-$k.md"
+              TESTS_COMPLETE=1
+              break
+            fi
+          done
+
+          echo "tests_complete=${TESTS_COMPLETE}" >> "$GITHUB_OUTPUT"
+          echo "iterations_run=${k}" >> "$GITHUB_OUTPUT"
+
+      - name: Push Phase 4 changes
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"
