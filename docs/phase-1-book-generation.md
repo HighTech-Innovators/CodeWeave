@@ -16,7 +16,7 @@ iterative generate → validate passes, then builds a PDF and a chapter index.
 | `PHASE1_MAX_ITERATIONS` | `10` | Maximum generate+validate pairs before stopping |
 | `PHASE1_MODEL_SCHEDULE` | `claude-opus-4.6:1,claude-sonnet-4.6:2,claude-haiku-4.5` | Model per iteration (`model:count,…,fallback`) |
 
-Plus the [global inputs](index.md#global-inputs-shared-by-all-phases) (repo, identity, `COPILOT_OAUTH_TOKEN`).
+Plus the [global inputs](index.md#global-inputs-shared-by-all-phases) (repo, identity, `COPILOT_TOKEN`).
 
 ### Prompt files
 

@@ -1,8 +1,8 @@
 name: 'CodeWeave Setup'
 description: >-
-  Shared per-job bootstrap: Node 22 + Copilot CLI, load .github/.env into the
+  Shared per-job bootstrap: Node 22 + Copilot CLI, load .github/codeweave.config into the
   job environment, and configure git identity. Run AFTER actions/checkout
-  (it sources .github/.env from the checked-out repo).
+  (it sources .github/codeweave.config from the checked-out repo).
 
 inputs:
   dry_run:
@@ -24,11 +24,11 @@ runs:
     - name: Load configuration + git identity
       shell: bash
       run: |
-        # Export every KEY=value from .env (comments/blank lines skipped) to the
+        # Export every KEY=value from codeweave.config (comments/blank lines skipped) to the
         # job env, plus DRY_RUN. `source` also makes them available in-shell here
         # so the git identity below can use $GIT_USER_NAME immediately.
-        set -a; source .github/.env; set +a
-        grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .github/.env >> "$GITHUB_ENV"
+        set -a; source .github/codeweave.config; set +a
+        grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .github/codeweave.config >> "$GITHUB_ENV"
         echo "DRY_RUN=${{ inputs.dry_run }}" >> "$GITHUB_ENV"
         git config user.name "$GIT_USER_NAME"
         git config user.email "$GIT_USER_EMAIL"

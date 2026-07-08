@@ -123,7 +123,7 @@ jobs:
 
       - name: Load configuration
         run: |
-          set -a; source .github/.env; set +a
+          set -a; source .github/codeweave.config; set +a
           {
             echo "GIT_USER_NAME=${GIT_USER_NAME}"
             echo "GIT_USER_EMAIL=${GIT_USER_EMAIL}"

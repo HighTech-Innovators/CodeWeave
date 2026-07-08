@@ -26,15 +26,16 @@ verdict.
 The pipeline executes as **GitHub Actions workflows** on a self-hosted runner.
 `codeweave.yml` is a thin orchestrator that wires per-phase reusable workflows
 (`phase-*.yml`) via `needs`/`if` resume-and-skip logic, sharing bootstrap (Node +
-Copilot CLI + `.env` + git identity) through the `codeweave-setup` composite action.
+Copilot CLI + `codeweave.config` + git identity) through the `codeweave-setup` composite action.
 Phases 7 and 8 run as two dedicated, **auto-chaining** workflows — Phase 7 handles one
 optimization per dispatch and triggers the next, with the last chaining into Phase 8.
 
-All runtime configuration lives in `.github/.env` (target repo, branch, per-phase
+All runtime configuration lives in `.github/codeweave.config` (target repo, branch, per-phase
 iteration caps, per-phase model schedules, git identity) — nothing is hardcoded in the
-workflow logic. Two secrets are required: `COPILOT_OAUTH_TOKEN` (authenticates the
-Copilot CLI) and `PUSH_TOKEN` (a fine-grained PAT that lets Phase 2 push ADRs and Phase
-7 push optimization branches to the target repo).
+workflow logic. Two secrets are required, both fine-grained PATs: `COPILOT_TOKEN`
+(authenticates the Copilot CLI; needs the *Copilot user requests: Read* user
+permission) and `PUSH_TOKEN` (*Contents: Read and write* on the target repo, letting
+Phase 2 push ADRs and Phase 7 push optimization branches).
 
 ## The eight phases
 

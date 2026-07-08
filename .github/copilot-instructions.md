@@ -9,7 +9,7 @@ The flow runs as **GHA workflows**: `codeweave.yml` for Phases 1–6; `phase-7-o
 **Key Components:**
 - **Workflow:** `.github/workflows/codeweave.yml` — orchestrator for Phases 1–6; it calls per-phase reusable workflows (`.github/workflows/phase-*.yml`) and shares bootstrap via the `.github/actions/codeweave-setup` composite action
 - **Optimization workflow:** `.github/workflows/phase-7-optimize.yml` — One optimization per run, auto-chaining (Phase 7); `.github/workflows/phase-8-report.yml` — aggregate report (Phase 8)
-- **Configuration:** `.github/.env` — Environment variables for external repo, branch, iterations, model schedules, and git identity
+- **Configuration:** `.github/codeweave.config` — Environment variables for external repo, branch, iterations, model schedules, and git identity
 - **Phase 1 Work Definition:** `work/1-generate-book.md` / `work/1-validate-book.md` — Book generation and validation prompts
 - **Phase 2 Work Definition:** `work/2-generate-adrs.md` / `work/2-validate-adrs.md` — ADR generation and validation prompts
 - **Phase 3 Work Definition:** `work/3-generate-harness.md` / `work/3-validate-harness.md` — Performance measurement harness design and validation prompts
@@ -92,8 +92,8 @@ These run after Phase 4 produces `tests-complete.md`. In GHA they span the main 
 
 **Configuration Flow:**
 ```
-.github/.env (source)
-  → (bash: source .github/.env)
+.github/codeweave.config (source)
+  → (bash: source .github/codeweave.config)
   → Environment variables (EXTERNAL_REPO_NAME, PHASE1_MAX_ITERATIONS, PHASE3_MODEL_SCHEDULE, etc.)
   → Available to workflow steps
 ```
@@ -101,7 +101,7 @@ These run after Phase 4 produces `tests-complete.md`. In GHA they span the main 
 ## Key Conventions
 
 ### 1. Configuration Management
-- All runtime settings are in `.github/.env`, not hardcoded in the workflow
+- All runtime settings are in `.github/codeweave.config`, not hardcoded in the workflow
 - Settings are simple `KEY=value` pairs sourced via bash
 - External repository configuration: `EXTERNAL_REPO_NAME`, `EXTERNAL_REPO_URL`, `EXTERNAL_REPO_BRANCH`, `EXTERNAL_REPO_WORK_BRANCH`
 - Iteration settings: `PHASE1_MAX_ITERATIONS` (Phase 1), `PHASE2_MAX_ITERATIONS` (Phase 2), `PHASE3_MAX_ITERATIONS` (Phase 3), `PHASE4_MAX_ITERATIONS` (Phase 4), `PHASE6_MAX_REPAIR_ITERATIONS` (Phase 6 repair loop, default 3), `PHASE6_BASELINE_RUNS` (Phase 6 measurement runs, default 5)
@@ -137,7 +137,7 @@ These run after Phase 4 produces `tests-complete.md`. In GHA they span the main 
 - `agent-state/` is created by Phase 1 at repo root of the target repo; holds AI working-state files (plan, quality-review, etc.)
 
 ### 5. Git Identity
-- Commit author configured from `.env` variables (`GIT_USER_NAME` and `GIT_USER_EMAIL`)
+- Commit author configured from `codeweave.config` variables (`GIT_USER_NAME` and `GIT_USER_EMAIL`)
 - Default: `github-actions[bot]` with GitHub Actions email
 - Each generate/validate pass produces a commit
 - A final `"Record final status"` commit is made after all phases complete
@@ -170,7 +170,7 @@ Edit `constraints/harness.md` before running Phase 3. Phase 3 reads this file an
 Edit `constraints/project.md` to replace the sample constraint with your repository-specific requirements (e.g., framework versions, architecture decisions, tech stack limitations).
 
 ### Adjust Iteration Settings
-Edit `.github/.env`:
+Edit `.github/codeweave.config`:
 - `PHASE1_MAX_ITERATIONS` — Phase 1 book generation
 - `PHASE2_MAX_ITERATIONS` — Phase 2 ADR generation
 - `PHASE3_MAX_ITERATIONS` — Phase 3 performance measurement
@@ -193,8 +193,8 @@ Edit `.github/.env`:
 |---|---|
 | `.github/workflows/codeweave.yml` | Orchestrator ("glue"): dispatch + `needs`/`if` resume logic calling the per-phase reusable workflows; `finalize` job inline |
 | `.github/workflows/phase-{1-book,2-adr,3-harness,4-tests,5-6-build-baseline}.yml` | Per-phase reusable workflows (`workflow_call`) for Phases 1–6 |
-| `.github/actions/codeweave-setup/action.yml` | Composite action: shared bootstrap (Node 22 + Copilot CLI + load `.env` + git identity) |
-| `.github/.env` | Runtime configuration (external repo, branch, iterations, model schedules, git identity) |
+| `.github/actions/codeweave-setup/action.yml` | Composite action: shared bootstrap (Node 22 + Copilot CLI + load `codeweave.config` + git identity) |
+| `.github/codeweave.config` | Runtime configuration (external repo, branch, iterations, model schedules, git identity) |
 | `.github/scripts/generate-indexes.js` | Generates `book/BOOK-INDEX.md` (after Phase 1) and `src/ADR-INDEX.md` (after Phase 2) |
 | `.github/scripts/load-harness-manifest.js` | Reads `integration-test/harness-manifest.json` for the GHA workflows (toolchain values → `eval`-able exports + `$GITHUB_ENV`); same built-in defaults |
 | `work/1-generate-book.md` | Phase 1 generation prompt |
@@ -231,25 +231,25 @@ The workflow invokes Copilot with:
 - **Phases 5, 6, 8 Allowed Tools:** the enumerated authoring/repair tools (`read`, `write`, `edit`, plus `create` for 5 and 8) **and** `shell`, with `shell(git:*)` denied — these phases author scripts/reports (5, 8) or repair code (6); the pipeline owns all commits (Phase 6 baseline collection itself is deterministic pipeline logic — the repair agent is its only Copilot invocation)
 - **Phase 7 Allowed Tools:** the hotspot-selection agent runs with `shell(git:*)` denied like the rest; the **optimization** agent is the sole exception that keeps git (`--allow-tool='shell'` with no git deny), since it works on the optimization branch in `src/` and reviews its own change with `git -C src diff`
 - **No User Prompts:** `--no-ask-user` flag ensures non-interactive runs
-- **GitHub Auth:** Uses `GH_TOKEN` from `secrets.COPILOT_OAUTH_TOKEN`
+- **GitHub Auth:** Uses `GH_TOKEN` from `secrets.COPILOT_TOKEN`
 
 If modifying tool permissions, update the corresponding `--allow-tool` flags in each phase's step.
 
 ## Dependencies & Prerequisites
 
 - **Node.js 22** — Required for Copilot CLI installation (auto-installed via `actions/setup-node@v4`)
-- **Bash** — Required to source `.github/.env`
+- **Bash** — Required to source `.github/codeweave.config`
 - **Git** — Cloning, commits, and pushing (pre-installed on runners)
 - **Self-Hosted Runner** — Configured as `runs-on: [self-hosted, Linux, X64]`
-- **GitHub Copilot OAuth Token** — Required secret: `COPILOT_OAUTH_TOKEN`
-- **Push Token** — Required secret for Phase 2: `PUSH_TOKEN` (fine-grained PAT with `Contents: write` on the target repository)
+- **Copilot Token** — Required secret: `COPILOT_TOKEN` (fine-grained PAT with the **Copilot user requests: Read** user permission)
+- **Push Token** — Required secret for Phase 2: `PUSH_TOKEN` (fine-grained PAT with **Contents: Read and write** on the target repository)
 
 ## Testing Locally
 
 For a single manual Copilot iteration:
 1. Manually clone the external repo: `git clone --depth 1 --branch <branch> <url> src`
 2. Create and checkout work branch: `cd src && git checkout -b <work-branch>`
-3. Source the .env file: `source ../.github/.env`
+3. Source the config file: `source ../.github/codeweave.config`
 4. Run a single generate pass: `copilot -p "Work on the task described in work/1-generate-book.md and constraints/project.md." --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --no-ask-user`
 5. Review changes: `git diff`, `git status`
 
@@ -261,4 +261,4 @@ For a single manual Copilot iteration:
 - Phase 2 commits and pushes ADR changes to the target repo's work branch after each iteration
 - Each outer-repo commit is atomic per pass; no partial/rollback logic
 - The `proof/` directory is committed and pushed along with code changes
-- The `.github/.env` file should be committed to the repository; it contains no secrets (secrets are in GitHub settings)
+- The `.github/codeweave.config` file should be committed to the repository; it contains no secrets (secrets are in GitHub settings)

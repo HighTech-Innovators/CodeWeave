@@ -9,7 +9,7 @@ Every iteration's changes are committed and all run artifacts are saved to `proo
 
 ## Workflow: CodeWeave
 
-**Orchestrator:** `.github/workflows/codeweave.yml` — a thin dispatcher that wires the per-phase **reusable workflows** (`.github/workflows/phase-1-book.yml` … `phase-5-6-build-baseline.yml`) via `needs`/`if` (resume + skip logic), with `finalize` inline. Shared bootstrap (Node + Copilot CLI + `.env` + git identity) lives in the `.github/actions/codeweave-setup` composite action. Phases 7–8 are the separate auto-chaining workflows `phase-7-optimize.yml` / `phase-8-report.yml`; once Phase 6 produces a baseline, `codeweave.yml`'s `trigger-phase-7` job dispatches the first optimization cycle, so a single dispatch runs Phases 1–8 end-to-end.
+**Orchestrator:** `.github/workflows/codeweave.yml` — a thin dispatcher that wires the per-phase **reusable workflows** (`.github/workflows/phase-1-book.yml` … `phase-5-6-build-baseline.yml`) via `needs`/`if` (resume + skip logic), with `finalize` inline. Shared bootstrap (Node + Copilot CLI + `codeweave.config` + git identity) lives in the `.github/actions/codeweave-setup` composite action. Phases 7–8 are the separate auto-chaining workflows `phase-7-optimize.yml` / `phase-8-report.yml`; once Phase 6 produces a baseline, `codeweave.yml`'s `trigger-phase-7` job dispatches the first optimization cycle, so a single dispatch runs Phases 1–8 end-to-end.
 
 ### Overview
 
@@ -30,7 +30,7 @@ Phases 1–6 run inside `codeweave.yml`; the Phase 7 optimization cycles (`phase
 
 ### Configuration
 
-Settings are stored in `.github/.env` and loaded at runtime:
+Settings are stored in `.github/codeweave.config` and loaded at runtime:
 
 ```env
 # External repository to process
@@ -97,8 +97,8 @@ Manually triggered via `workflow_dispatch`. Optional inputs: `start_from_phase` 
 1. **Checkout** — Checks out this repository with full history and credential persistence.
 2. **Setup Node.js 22** — Required to install the Copilot CLI.
 3. **Install Copilot CLI** — Installs `@github/copilot` globally via npm.
-4. **Load configuration** — Sources `.github/.env`, extracts the first repo's configuration, and exports settings as environment variables.
-5. **Configure git identity** — Sets the git commit author from `.env` variables.
+4. **Load configuration** — Sources `.github/codeweave.config`, extracts the first repo's configuration, and exports settings as environment variables.
+5. **Configure git identity** — Sets the git commit author from `codeweave.config` variables.
 6. **Clone external repository** — Clones the specified branch from the external repo (shallow, single branch) into `src`, then creates and checks out the work branch. The `src/` directory is excluded from git tracking via `.git/info/exclude`.
 7. **Run the CodeWeave pipeline (Phases 1–6)** — The `codeweave.yml` orchestrator calls a per-phase reusable workflow for each phase: Phases 1–4 are generate+validate loops with file-based early exit, Phase 5 builds the target from source, and Phase 6 collects the deterministic baseline. Each phase's gate, inputs, and outputs are documented in [`docs/`](docs/index.md) (see the phase table above). It finally writes `proof/final-status.md` summarising all phases.
 8. **Push** — Pushes all outer-repo commits back to the triggering branch.
@@ -140,12 +140,12 @@ Each iteration produces output files organized in `proof/`:
 
 Git commit history provides the natural diff trail between iterations.
 
-### Required Secret
+### Required Secrets
 
 | Secret | Purpose |
 |---|---|
-| `COPILOT_OAUTH_TOKEN` | OAuth token used to authenticate the Copilot CLI (`GH_TOKEN` in the step environment) |
-| `PUSH_TOKEN` | Fine-grained PAT used to push to the target repository — Phase 2 pushes ADR changes to the work branch, and Phase 7 pushes each gate-passing optimization branch. Needs **Contents: write** permission on the target repository only. |
+| `COPILOT_TOKEN` | Fine-grained PAT used to authenticate the Copilot CLI (`GH_TOKEN` in the step environment). Needs the **Copilot user requests: Read** user permission (Account permissions — no repository permissions required). |
+| `PUSH_TOKEN` | Fine-grained PAT used to push to the target repository — Phase 2 pushes ADR changes to the work branch, and Phase 7 pushes each gate-passing optimization branch. Needs the **Contents: Read and write** repository permission on the target repository only. |
 
 ## Work Definition and Constraints
 
@@ -175,8 +175,8 @@ The workflow improves code based on tasks and constraints you define:
 |---|---|
 | `.github/workflows/codeweave.yml` | Orchestrator (glue): dispatch + `needs`/`if` calling the per-phase reusable workflows; `finalize` inline |
 | `.github/workflows/phase-*.yml` | Per-phase reusable workflows (1–6) + `phase-7-optimize.yml` / `phase-8-report.yml` |
-| `.github/actions/codeweave-setup/action.yml` | Composite action: shared bootstrap (Node + Copilot CLI + `.env` + git identity) |
-| `.github/.env` | Runtime configuration (external repo, branch, iterations, git identity) |
+| `.github/actions/codeweave-setup/action.yml` | Composite action: shared bootstrap (Node + Copilot CLI + `codeweave.config` + git identity) |
+| `.github/codeweave.config` | Runtime configuration (external repo, branch, iterations, git identity) |
 | `.github/scripts/generate-indexes.js` | Generates `book/BOOK-INDEX.md` (Phase 1) and `src/ADR-INDEX.md` (Phase 2) |
 | `work/1-generate-book.md` | Phase 1 generation prompt (no self-certification) |
 | `work/1-validate-book.md` | Phase 1 validation prompt (exclusively owns `manuscript-complete.md`) |

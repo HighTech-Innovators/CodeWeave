@@ -133,7 +133,7 @@ jobs:
         id: build_source
         if: inputs.start_from_phase != '6'
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
         run: |
           mkdir -p proof integration-test/reports
 
@@ -274,7 +274,7 @@ jobs:
       - name: Phase 6 baseline execution
         id: execute
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
         run: |
           mkdir -p proof integration-test/reports
 

@@ -109,7 +109,7 @@ dispatch of `codeweave.yml` runs all eight phases end-to-end.
 
 These are not repeated in the per-phase pages.
 
-### Repository / identity (`.github/.env`)
+### Repository / identity (`.github/codeweave.config`)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -135,8 +135,8 @@ These are not repeated in the per-phase pages.
 
 | Secret | Used by | Purpose |
 |--------|---------|---------|
-| `COPILOT_OAUTH_TOKEN` | all Copilot phases | Authenticates the Copilot CLI (`GH_TOKEN`) |
-| `PUSH_TOKEN` | Phase 2, Phase 7 | Fine-grained PAT (`Contents: write`) on the target repo — Phase 2 pushes ADRs to the work branch; Phase 7 pushes each gate-passing optimization branch |
+| `COPILOT_TOKEN` | all Copilot phases | Fine-grained PAT that authenticates the Copilot CLI (`GH_TOKEN`) — needs the **Copilot user requests: Read** user permission |
+| `PUSH_TOKEN` | Phase 2, Phase 7 | Fine-grained PAT (**Contents: Read and write**) on the target repo — Phase 2 pushes ADRs to the work branch; Phase 7 pushes each gate-passing optimization branch |
 
 ### Prompt and constraint files
 
@@ -171,8 +171,8 @@ All Copilot invocations use `--no-ask-user` (non-interactive). Every phase excep
 ## Configuration flow
 
 ```
-.github/.env  ──(bash: source)──>  environment variables  ──>  workflow steps
+.github/codeweave.config  ──(bash: source)──>  environment variables  ──>  workflow steps
 ```
 
-Every runtime setting is a `KEY=value` pair in `.github/.env`. The composite action
+Every runtime setting is a `KEY=value` pair in `.github/codeweave.config`. The composite action
 exports them into the environment; nothing is hardcoded in the workflow logic.

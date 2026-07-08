@@ -21,7 +21,7 @@ on:
         type: number
         default: 1
       total_optimizations:
-        description: 'Total optimization points (0 = read PHASE7_MAX_OPTIMIZATIONS from .env)'
+        description: 'Total optimization points (0 = read PHASE7_MAX_OPTIMIZATIONS from codeweave.config)'
         required: false
         type: number
         default: 0
@@ -65,7 +65,7 @@ jobs:
 
       - name: Load configuration
         run: |
-          set -a; source .github/.env; set +a
+          set -a; source .github/codeweave.config; set +a
           # Load the harness toolchain manifest: eval sets HARNESS_* for this
           # step (VENV_PY below) and the same invocation appends them to
           # $GITHUB_ENV for later steps (profiler env, hotspot path). Defaults
@@ -140,7 +140,7 @@ jobs:
       - name: Step 1 — Hotspot selection (index=1 only, if plan absent)
         if: ${{ inputs.optimization_index == 1 }}
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
         run: |
           mkdir -p proof
           if [ -f integration-test/optimization-plan.md ]; then
@@ -171,7 +171,7 @@ jobs:
       - name: Steps 2-4 — Generate, golden, build, correctness gate (repair loop)
         id: genloop
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
         run: |
           mkdir -p proof
           N=${{ inputs.optimization_index }}

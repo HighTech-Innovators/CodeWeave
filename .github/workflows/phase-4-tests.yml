@@ -58,7 +58,7 @@ jobs:
       - name: Phase 4 iterations
         id: iterations
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
         run: |
           mkdir -p proof integration-test
 
