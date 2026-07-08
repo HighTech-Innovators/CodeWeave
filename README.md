@@ -198,3 +198,8 @@ The workflow improves code based on tasks and constraints you define:
 | `constraints/harness-context.md` | *(optional)* Domain context for Phase 3 scenario and observability design |
 | `proof/` | Output artifacts directory (auto-created): run logs, session transcripts, final status |
 | `.git/info/exclude` | Excludes `src/` from git tracking (auto-configured by workflow) |
+
+## License
+Copyright (C) 2026 Hightech ICT B.V.
+
+This project is licensed under the GNU General Public License v3.0 or later. See the LICENSE file for details.
