@@ -46,7 +46,7 @@ jobs:
   optimization-cycle:
     name: 'Phase 7: Optimization ${{ inputs.optimization_index }}'
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 240   # repair-loop builds + 2x measurement blocks + A-side rebuild
+    timeout-minutes: 300   # repair-loop builds + 2 measurement blocks (each up to 3 energy-retry run sets) + A-side rebuild
 
     steps:
       - uses: actions/checkout@v6
@@ -390,11 +390,10 @@ jobs:
         run: |
           N=${{ inputs.optimization_index }}
           R=integration-test/reports
-          rm -f "$R/run-records.json"
-          for i in $(seq 1 "$PHASE7_BASELINE_RUNS"); do
-            env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=$i bash integration-test/run.sh
-          done
-          cp "$R/run-records.json" "$R/run-records-opt${N}.json"
+          # Collect the B-side run set with the bounded energy-validity retry.
+          # Shared with the A-side step — see the script for the retry,
+          # probe-failure, and unavailable-marking semantics.
+          bash .github/scripts/measure-energy-retry.sh "B-side" "$R/run-records-opt${N}.json"
           # A short record set means the test exited 0 but did not write every
           # run — comparing mismatched N would emit an invalid verdict (A1).
           CNT=$("$VENV_PY" -c "import json;print(len(json.load(open('$R/run-records-opt${N}.json'))))" 2>/dev/null || echo 0)
@@ -437,11 +436,9 @@ jobs:
             echo "MEASURE_NOTE=A-side base rebuild compiled nothing (variant binary likely still installed)" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          rm -f "$R/run-records.json"
-          for i in $(seq 1 "$PHASE7_BASELINE_RUNS"); do
-            env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=$i bash integration-test/run.sh
-          done
-          cp "$R/run-records.json" "$R/run-records-base-opt${N}.json"
+          # Collect the A-side run set with the same bounded energy-validity
+          # retry as the B-side (shared script; applied independently per side).
+          bash .github/scripts/measure-energy-retry.sh "A-side" "$R/run-records-base-opt${N}.json"
           # Both sides must have the full, equal record count before A/B (A1).
           CNT=$("$VENV_PY" -c "import json;print(len(json.load(open('$R/run-records-base-opt${N}.json'))))" 2>/dev/null || echo 0)
           if [ "$CNT" != "$PHASE7_BASELINE_RUNS" ] || [ "$CNT" != "${{ steps.bside.outputs.VARIANT_RUNS }}" ]; then

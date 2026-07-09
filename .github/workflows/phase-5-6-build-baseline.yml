@@ -346,68 +346,116 @@ jobs:
             R=integration-test/reports
             VENV_PY="$PWD/integration-test/${HARNESS_VENV_PYTHON:-.venv/bin/python}"
 
-            # Clear run records before the measurement block: the test appends, and
-            # stale/probe-era records would contaminate the baseline statistics (D11)
-            rm -f "$R/run-records.json"
+            # Energy-validity retry loop (bounded, same style as the repair loop
+            # above): CodeCarbon can deliver an all-zero energy/CO2 delta for an
+            # entire run set (tracker/RAPL hiccup), which ab_compare reports as
+            # energy_valid=false. Rather than accept zero as the baseline energy
+            # figure, repeat the FULL set of baseline runs, up to
+            # PHASE6_ENERGY_MAX_ATTEMPTS total attempts.
+            PHASE6_ENERGY_MAX_ATTEMPTS="${PHASE6_ENERGY_MAX_ATTEMPTS:-3}"
+            BASELINE_INCOMPLETE=0
+            AB_OK=true
+            ENERGY_VALID=false
+            for E in $(seq 1 "${PHASE6_ENERGY_MAX_ATTEMPTS}"); do
+              # Clear run records before each measurement set: the test appends, and
+              # stale/probe-era (or invalid-energy) records would contaminate the
+              # baseline statistics (D11)
+              rm -f "$R/run-records.json"
 
-            echo "::group::Phase 6 — Baseline runs (${PHASE6_BASELINE_RUNS})"
-            FAILED=0
-            for i in $(seq 1 "${PHASE6_BASELINE_RUNS}"); do
-              echo "Baseline run ${i}/${PHASE6_BASELINE_RUNS}"
-              if BASELINE_RUN_ID="$i" bash integration-test/run.sh > "proof/6-baseline-run-${i}.log" 2>&1; then
-                echo "  run ${i}: ok"
+              echo "::group::Phase 6 — Baseline runs (${PHASE6_BASELINE_RUNS}), energy attempt ${E}/${PHASE6_ENERGY_MAX_ATTEMPTS}"
+              FAILED=0
+              for i in $(seq 1 "${PHASE6_BASELINE_RUNS}"); do
+                echo "Baseline run ${i}/${PHASE6_BASELINE_RUNS}"
+                if BASELINE_RUN_ID="$i" bash integration-test/run.sh > "proof/6-baseline-run-${i}.log" 2>&1; then
+                  echo "  run ${i}: ok"
+                else
+                  echo "  run ${i}: FAILED (see proof/6-baseline-run-${i}.log)"   # non-fatal, counted
+                  FAILED=$((FAILED + 1))
+                fi
+              done
+              echo "::endgroup::"
+
+              # A short record set means a run exited 0 without writing its record
+              # (or some runs failed): the baseline would be computed on fewer
+              # samples than intended. Treat it as a baseline failure and write the
+              # error stub so Phase 7 is blocked (A1); skip ab_compare. This is a
+              # run failure, not an energy-validity failure — retrying would not
+              # fix it, so stop the energy loop here.
+              CNT=$("$VENV_PY" -c "import json;print(len(json.load(open('$R/run-records.json'))))" 2>/dev/null || echo 0)
+              if [ "$CNT" != "${PHASE6_BASELINE_RUNS}" ]; then
+                BASELINE_INCOMPLETE=1
+                echo "::error::Phase 6 collected ${CNT}/${PHASE6_BASELINE_RUNS} run records — baseline incomplete; writing error stub so Phase 7 is blocked"
+                printf '{"schema": "v2", "error": "incomplete baseline: %s/%s runs collected", "n": %s}\n' "$CNT" "${PHASE6_BASELINE_RUNS}" "$CNT" > "$R/baseline.json"
+                {
+                  echo "# Baseline Execution Complete"
+                  echo ""
+                  echo "Date: $(date +%Y-%m-%d)"
+                  echo "Runs completed: ${CNT} / ${PHASE6_BASELINE_RUNS} (${FAILED} run(s) failed)"
+                  echo ""
+                  echo "## Notes"
+                  echo ""
+                  echo "Baseline INCOMPLETE — fewer records than requested. v2 statistics not computed; Phase 7 will refuse this baseline."
+                } > "$R/baseline-complete.md"
+                break
+              fi
+
+              # Step 4: v2 statistics — ab_compare.py --mode baseline writes baseline.json,
+              # baseline-summary.md AND baseline-complete.md into the reports dir, all on
+              # per-iteration metrics (D7). Run with the venv interpreter, not system python.
+              echo "::group::Phase 6 — Baseline statistics (ab_compare v2)"
+              if "$VENV_PY" integration-test/_tools/ab_compare.py --mode baseline \
+                  --runs "$R/run-records.json" --output-dir "$R"; then
+                echo "ab_compare baseline analysis complete"
               else
-                echo "  run ${i}: FAILED (see proof/6-baseline-run-${i}.log)"   # non-fatal, counted
-                FAILED=$((FAILED + 1))
+                AB_OK=false
+                echo "WARNING: ab_compare --mode baseline failed — writing a fallback marker so the failure is visible and the phase gate still has a marker"
+                # Overwrite unconditionally: a baseline.json left by an earlier
+                # retry attempt describes a since-deleted run-records set and
+                # would pass Phase 7's prereq gate as a valid v2 baseline.
+                printf '{"schema": "v2", "error": "ab_compare baseline failed", "n": 0}\n' > "$R/baseline.json"
+                {
+                  echo "# Baseline Execution Complete"
+                  echo ""
+                  echo "Date: $(date +%Y-%m-%d)"
+                  echo "Runs completed: see proof/6-baseline-run-*.log (${FAILED} run(s) failed)"
+                  echo ""
+                  echo "## Notes"
+                  echo ""
+                  echo "ab_compare.py --mode baseline FAILED — v2 statistics unavailable. See the job log."
+                } > "$R/baseline-complete.md"
+              fi
+              echo "::endgroup::"
+              if [ "$AB_OK" != true ]; then
+                break
+              fi
+
+              ENERGY_VALID=$("$VENV_PY" -c "import json;print(str(json.load(open('$R/baseline.json')).get('energy_valid')).lower())" 2>/dev/null || echo false)
+              if [ "$ENERGY_VALID" = "true" ]; then
+                break
+              fi
+              if [ "$E" -lt "${PHASE6_ENERGY_MAX_ATTEMPTS}" ]; then
+                echo "::warning::Baseline energy_valid=false (mean energy_joules == 0) — repeating the full baseline run set (attempt $((E + 1))/${PHASE6_ENERGY_MAX_ATTEMPTS})"
               fi
             done
-            echo "::endgroup::"
 
-            # A short record set means a run exited 0 without writing its record
-            # (or some runs failed): the baseline would be computed on fewer
-            # samples than intended. Treat it as a baseline failure and write the
-            # error stub so Phase 7 is blocked (A1); skip ab_compare.
-            CNT=$("$VENV_PY" -c "import json;print(len(json.load(open('$R/run-records.json'))))" 2>/dev/null || echo 0)
-            BASELINE_INCOMPLETE=0
-            if [ "$CNT" != "${PHASE6_BASELINE_RUNS}" ]; then
-              BASELINE_INCOMPLETE=1
-              echo "::error::Phase 6 collected ${CNT}/${PHASE6_BASELINE_RUNS} run records — baseline incomplete; writing error stub so Phase 7 is blocked"
-              printf '{"schema": "v2", "error": "incomplete baseline: %s/%s runs collected", "n": %s}\n' "$CNT" "${PHASE6_BASELINE_RUNS}" "$CNT" > "$R/baseline.json"
-              {
-                echo "# Baseline Execution Complete"
-                echo ""
-                echo "Date: $(date +%Y-%m-%d)"
-                echo "Runs completed: ${CNT} / ${PHASE6_BASELINE_RUNS} (${FAILED} run(s) failed)"
-                echo ""
-                echo "## Notes"
-                echo ""
-                echo "Baseline INCOMPLETE — fewer records than requested. v2 statistics not computed; Phase 7 will refuse this baseline."
-              } > "$R/baseline-complete.md"
-            fi
-
-            # Step 4: v2 statistics — ab_compare.py --mode baseline writes baseline.json,
-            # baseline-summary.md AND baseline-complete.md into the reports dir, all on
-            # per-iteration metrics (D7). Run with the venv interpreter, not system python.
-            if [ "$BASELINE_INCOMPLETE" = 0 ]; then
-            echo "::group::Phase 6 — Baseline statistics (ab_compare v2)"
-            if "$VENV_PY" integration-test/_tools/ab_compare.py --mode baseline \
-                --runs "$R/run-records.json" --output-dir "$R"; then
-              echo "ab_compare baseline analysis complete"
-            else
-              echo "WARNING: ab_compare --mode baseline failed — writing a fallback marker so the failure is visible and the phase gate still has a marker"
-              [ -f "$R/baseline.json" ] || printf '{"schema": "v2", "error": "ab_compare baseline failed", "n": 0}\n' > "$R/baseline.json"
-              {
-                echo "# Baseline Execution Complete"
-                echo ""
-                echo "Date: $(date +%Y-%m-%d)"
-                echo "Runs completed: see proof/6-baseline-run-*.log (${FAILED} run(s) failed)"
-                echo ""
-                echo "## Notes"
-                echo ""
-                echo "ab_compare.py --mode baseline FAILED — v2 statistics unavailable. See the job log."
-              } > "$R/baseline-complete.md"
-            fi
-            echo "::endgroup::"
+            # Energy retry budget exhausted: keep the (valid) timing baseline but
+            # mark the energy fields unavailable (null) rather than zero — a zero
+            # would silently read as a real measurement downstream. Mark ALL the
+            # committed artifacts consistently: baseline.json (nulls + note),
+            # run-records.json (null energy fields), and the two markdown
+            # reports (appended note), so no artifact presents 0.0 as measured.
+            if [ "$BASELINE_INCOMPLETE" = 0 ] && [ "$AB_OK" = true ] && [ "$ENERGY_VALID" != "true" ]; then
+              echo "::warning::Baseline energy_valid still false after ${PHASE6_ENERGY_MAX_ATTEMPTS} attempt(s) — marking baseline energy fields as unavailable"
+              "$VENV_PY" -c "import json; p='$R/baseline.json'; d=json.load(open(p)); d.update(energy_valid=False, joules_per_iter_mean=None, mean_co2=None, energy_note='energy measurement unavailable: zero energy across ${PHASE6_ENERGY_MAX_ATTEMPTS} full baseline run set(s)'); json.dump(d, open(p, 'w'), indent=2)"
+              "$VENV_PY" -c "import json; p='$R/run-records.json'; recs=json.load(open(p)); [r.update(energy_joules=None, co2_grams=None) for r in recs]; json.dump(recs, open(p, 'w'), indent=2)"
+              for f in "$R/baseline-summary.md" "$R/baseline-complete.md"; do
+                {
+                  echo ""
+                  echo "## Energy Unavailable"
+                  echo ""
+                  echo "Energy measurement UNAVAILABLE — zero energy/CO2 delta across ${PHASE6_ENERGY_MAX_ATTEMPTS} full baseline run set(s). Any energy/CO2 figures above are not measurements; baseline.json carries them as null with energy_valid=false."
+                } >> "$f"
+              done
             fi
 
             # Step 5: tracing pass — non-integer BASELINE_RUN_ID=trace means the test
