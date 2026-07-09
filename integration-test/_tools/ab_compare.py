@@ -97,7 +97,15 @@ def load_v2_records(path: Path, label: str):
 
 def joules_per_iter(record):
     iters = record.get("iterations", 0)
-    return record.get("energy_joules", 0.0) / iters if iters else 0.0
+    # `or 0.0` also covers null energy fields — the pipeline marks them
+    # unavailable (null) when the energy-validity retry budget is exhausted.
+    energy = record.get("energy_joules") or 0.0
+    return energy / iters if iters else 0.0
+
+
+def energy_stats(records):
+    """Mean/std/CV of per-run energy_joules (null-safe, see joules_per_iter)."""
+    return compute_stats([r.get("energy_joules") or 0.0 for r in records])
 
 
 def baseline_mode(runs_path: Path, output_dir: Path):
@@ -108,8 +116,11 @@ def baseline_mode(runs_path: Path, output_dir: Path):
     iterations_stats = compute_stats([r["iterations"] for r in records])
     jpi_stats = compute_stats([joules_per_iter(r) for r in records])
     wall_stats = compute_stats([r["wall_clock_ms"] for r in records])
-    co2_values = [r.get("co2_grams", 0) for r in records]
+    co2_values = [r.get("co2_grams") or 0 for r in records]
     mean_co2 = sum(co2_values) / len(co2_values) if co2_values else 0
+    # Validity gate for the measurement loop: an all-zero energy set means the
+    # tracker never delivered a delta (not that the workload used no energy).
+    energy_valid = energy_stats(records)["mean"] > 0
 
     mde_pct = MDE_FACTOR * iter_stats["cv"] * 100
 
@@ -124,6 +135,7 @@ def baseline_mode(runs_path: Path, output_dir: Path):
         "iterations_std": iterations_stats["std"],
         "joules_per_iter_mean": jpi_stats["mean"],
         "mean_co2": mean_co2,
+        "energy_valid": energy_valid,
         "wall_clock_informational": {
             "mean_ms": wall_stats["mean"],
             "std_ms": wall_stats["std"],
@@ -346,6 +358,8 @@ def compare_mode(baseline_path: Path, variant_path: Path, output_prefix: Path,
     var_jpi = compute_stats([joules_per_iter(r) for r in variant_records])
     base_wall = compute_stats([r["wall_clock_ms"] for r in baseline_records])
     var_wall = compute_stats([r["wall_clock_ms"] for r in variant_records])
+    base_energy = energy_stats(baseline_records)
+    var_energy = energy_stats(variant_records)
 
     # Welch's t-test on per-run median iteration latency
     t_stat, p_value = ttest_ind(base_iter, var_iter, equal_var=False)
@@ -382,7 +396,7 @@ def compare_mode(baseline_path: Path, variant_path: Path, output_prefix: Path,
     if phase6_baseline_path:
         drift = drift_check(phase6_baseline_path, base_stats)
 
-    def stat_block(iter_s, iterations_s, jpi_s, wall_s):
+    def stat_block(iter_s, iterations_s, jpi_s, wall_s, energy_s):
         return {
             "n": iter_s["n"],
             "median_iter_ms_mean": iter_s["mean"],
@@ -391,6 +405,7 @@ def compare_mode(baseline_path: Path, variant_path: Path, output_prefix: Path,
             "iterations_mean": iterations_s["mean"],
             "joules_per_iter_mean": jpi_s["mean"],
             "wall_clock_ms_mean": wall_s["mean"],
+            "energy_valid": energy_s["mean"] > 0,
         }
 
     comparison_result = {
@@ -408,8 +423,8 @@ def compare_mode(baseline_path: Path, variant_path: Path, output_prefix: Path,
         "delta_micro_pct": micro["delta_micro_pct"] if micro else None,
         "micro_significant": micro["micro_significant"] if micro else None,
         "micro_detail": micro,
-        "baseline": stat_block(base_stats, base_iterations, base_jpi, base_wall),
-        "variant": stat_block(var_stats, var_iterations, var_jpi, var_wall),
+        "baseline": stat_block(base_stats, base_iterations, base_jpi, base_wall, base_energy),
+        "variant": stat_block(var_stats, var_iterations, var_jpi, var_wall, var_energy),
         "wall_clock_informational": {
             "baseline_mean_ms": base_wall["mean"],
             "variant_mean_ms": var_wall["mean"],
