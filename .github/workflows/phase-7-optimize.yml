@@ -280,29 +280,44 @@ jobs:
               continue
             fi
             ccache -s > "proof/7-opt-${N}-ccache-${ITER}.txt"
-            # Rebuild verification: native source changed but 0 compiles => edit never reached the build
+            # Rebuild verification: native source changed but 0 compiles => edit never reached the build.
+            # `|| true`: ccache omits the "Cacheable calls" line when nothing compiled, and under
+            # `set -eo pipefail` a no-match grep would abort the whole step (observed: opt 2 iter 3
+            # died here after a VAL-only repair produced a legitimate zero-compile rebuild).
             CHANGED=$(git -C src diff --name-only HEAD)
-            COMPILES=$(grep -oP 'Cacheable calls:\s+\K\d+' "proof/7-opt-${N}-ccache-${ITER}.txt" | head -1)
+            COMPILES=$(grep -oP 'Cacheable calls:\s+\K\d+' "proof/7-opt-${N}-ccache-${ITER}.txt" | head -1 || true)
             if echo "$CHANGED" | grep -qE "\.($NATIVE_RE)\$" && [ "${COMPILES:-0}" = "0" ]; then
               { echo ""; echo "## Build Errors (iteration $ITER)"; echo "Native source files changed but the build compiled nothing — the edit did not reach the build."; echo "$CHANGED"; } >> "$VAL"
               continue
             fi
 
             # --- Correctness gate 7a-7f (venv interpreter throughout) ---
+            # Each gate tees its output to $GLOG and, on failure, names itself in
+            # GATE_FAILED. The failure record below carries both into $VAL: the
+            # repair agent can only fix what it can see — a generic "one of 7a-7f
+            # failed" once sent five consecutive cycles chasing fuzz-gate ghosts
+            # while 7d was failing on a missing venv dependency.
             echo "::group::opt ${N} iteration ${ITER} — correctness gate"
             GATE_OK=true
+            GATE_FAILED=""
+            GLOG="$RUNNER_TEMP/gate-output.txt"
+            : > "$GLOG"
 
             # 7a: import + trivial op (command from the harness manifest)
-            "$VENV_PY" -c "${HARNESS_SMOKE_IMPORT_OP_CMD:-import torch; torch.mm(torch.randn(4,4), torch.randn(4,4))}" || GATE_OK=false
+            if ! "$VENV_PY" -c "${HARNESS_SMOKE_IMPORT_OP_CMD:-import torch; torch.mm(torch.randn(4,4), torch.randn(4,4))}" 2>&1 | tee "$GLOG"; then
+              GATE_OK=false; GATE_FAILED="7a import + trivial op"
+            fi
 
             # 7b: integration smoke (non-integer run ID -> writes no run record).
             # Retried once: a transient harness/env flake recovers on the retry,
             # a real breakage fails both times — so an env flake does not become a
             # false FAILED verdict that still auto-chains into Phase 8 (C5).
             if [ "$GATE_OK" = true ]; then
-              if ! env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=smoke bash integration-test/run.sh; then
+              if ! env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=smoke bash integration-test/run.sh 2>&1 | tee "$GLOG"; then
                 echo "7b smoke run failed (attempt 1/2) — retrying once to rule out an environment flake"
-                env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=smoke bash integration-test/run.sh || GATE_OK=false
+                if ! env "${HARNESS_PROFILER_ENABLE_ENV:-ENABLE_PROFILER}=0" BASELINE_RUN_ID=smoke bash integration-test/run.sh 2>&1 | tee "$GLOG"; then
+                  GATE_OK=false; GATE_FAILED="7b integration smoke (run.sh, failed twice)"
+                fi
               fi
             fi
 
@@ -312,11 +327,15 @@ jobs:
             if [ "$GATE_OK" = true ]; then
               TEST_FILE=$(field 'Unit test file'); TEST_PATTERN=$(field 'Unit test pattern')
               if [ -z "$TEST_PATTERN" ]; then
-                echo "7c: missing 'Unit test pattern' — provide a non-empty -k selector for the changed op"; GATE_OK=false
+                echo "7c: missing 'Unit test pattern' — provide a non-empty -k selector for the changed op" | tee "$GLOG"
+                GATE_OK=false; GATE_FAILED="7c targeted unit test (missing 'Unit test pattern')"
               else
                 case "$TEST_FILE" in
-                  test/*.py) (cd src && "$VENV_PY" -m pytest "$TEST_FILE" -k "$TEST_PATTERN" --tb=short -x) || GATE_OK=false ;;
-                  *) echo "7c: invalid/missing Unit test file: '$TEST_FILE'"; GATE_OK=false ;;
+                  test/*.py) if ! (cd src && "$VENV_PY" -m pytest "$TEST_FILE" -k "$TEST_PATTERN" --tb=short -x) 2>&1 | tee "$GLOG"; then
+                               GATE_OK=false; GATE_FAILED="7c targeted unit test (pytest '$TEST_FILE' -k '$TEST_PATTERN')"
+                             fi ;;
+                  *) echo "7c: invalid/missing Unit test file: '$TEST_FILE'" | tee "$GLOG"
+                     GATE_OK=false; GATE_FAILED="7c targeted unit test (invalid 'Unit test file')" ;;
                 esac
               fi
             fi
@@ -326,28 +345,33 @@ jobs:
               OPINFO=$(field 'OpInfo pattern')
               if [ -n "$OPINFO" ]; then
                 set +e
-                (cd src && timeout 1800 "$VENV_PY" -m pytest "${HARNESS_OP_SUITE_FILE:-test/test_ops.py}" -k "$OPINFO" --tb=short -x); RC=$?
+                (cd src && timeout 1800 "$VENV_PY" -m pytest "${HARNESS_OP_SUITE_FILE:-test/test_ops.py}" -k "$OPINFO" --tb=short -x) 2>&1 | tee "$GLOG"; RC=$?
                 set -e
                 if [ "$RC" -eq 124 ]; then echo "7d OpInfo: SKIPPED (timeout, non-fatal)" >> "proof/7-opt-${N}-gate-notes.md";
-                elif [ "$RC" -ne 0 ]; then GATE_OK=false; fi
+                elif [ "$RC" -ne 0 ]; then GATE_OK=false; GATE_FAILED="7d op-suite (pytest '${HARNESS_OP_SUITE_FILE:-test/test_ops.py}' -k '$OPINFO')"; fi
               fi
             fi
 
             # 7f: differential fuzz — variant vs base golden (PHASE7_PLAN §8)
             if [ "$GATE_OK" = true ] && [ "$PHASE7_FUZZ_REQUIRED" != "0" ]; then
               if [ ! -f "integration-test/reports/fuzz-golden-opt${N}.pt" ]; then
-                echo "7f: no golden (capture did not run)"; GATE_OK=false
+                echo "7f: no golden (capture did not run)" | tee "$GLOG"
+                GATE_OK=false; GATE_FAILED="7f differential fuzz (golden missing)"
               elif ! "$VENV_PY" integration-test/_tools/diff_fuzz.py \
                   --spec "integration-test/fuzz/opt${N}_fuzz.py" --mode compare \
                   --golden "integration-test/reports/fuzz-golden-opt${N}.pt" \
-                  --report "integration-test/reports/fuzz-diff-opt${N}.json"; then
-                GATE_OK=false
+                  --report "integration-test/reports/fuzz-diff-opt${N}.json" 2>&1 | tee "$GLOG"; then
+                GATE_OK=false; GATE_FAILED="7f differential fuzz (variant diverges from base golden)"
               fi
             fi
             echo "::endgroup::"
 
             if [ "$GATE_OK" = true ]; then break; fi
-            { echo ""; echo "## Correctness Failure (iteration $ITER)"; echo "One of gates 7a-7f failed (see job log above)."; } >> "$VAL"
+            { echo ""; echo "## Correctness Failure (iteration $ITER)";
+              echo "Failing gate: ${GATE_FAILED:-unknown (7a-7f)}";
+              echo ""; echo '```';
+              tail -40 "$GLOG" 2>/dev/null || echo "(no gate output captured)";
+              echo '```'; } >> "$VAL"
           done
 
           echo "GATE_OK=$GATE_OK" >> "$GITHUB_OUTPUT"
@@ -429,7 +453,7 @@ jobs:
           BUILD_CMD=${BUILD_TMPL//\{py\}/$VENV_PY}
           ccache -z
           (cd src && env $BUILD_ENV $BUILD_CMD > "$RUNNER_TEMP/base-build.txt" 2>&1)
-          COMPILES=$(ccache -s | grep -oP 'Cacheable calls:\s+\K\d+' | head -1)
+          COMPILES=$(ccache -s | grep -oP 'Cacheable calls:\s+\K\d+' | head -1 || true)
           if [ "$CPP_CHANGED" = yes ] && [ "${COMPILES:-0}" = "0" ]; then
             echo "::error::A-side rebuild compiled nothing despite native changes — variant binary likely still installed"
             echo "MEASURE_OK=false" >> "$GITHUB_OUTPUT"

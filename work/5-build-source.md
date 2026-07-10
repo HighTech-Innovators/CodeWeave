@@ -38,6 +38,15 @@ From the target's own documentation (NOT from general knowledge), determine:
 - The exact build/install command for a **from-source, editable** install
 - Required system tools (compiler, cmake, ninja, ccache, etc.) and Python build
   requirements (the target may have a dedicated requirements file for building)
+- The target's **development/test-suite requirements** — the packages its own test
+  suite imports at collection time, usually listed separately from the build
+  requirements (e.g. a top-level `requirements.txt` "development extras" section, a
+  `requirements-dev.txt`, or a `[dev]`/`[test]` extra). These are NOT optional: the
+  Phase 7 correctness gates run the **target's own test suite** (`src/test/...`, and
+  the op-suite file from the harness manifest) with the harness venv interpreter, so
+  a venv that can build the target but cannot *collect* its tests makes every
+  optimization cycle fail its gates with an import error unrelated to the change
+  under test
 - The environment flags that disable components irrelevant to a CPU-only inference
   harness (CUDA, distributed, test binaries). Check `constraints/project.md` for
   any required build flags specific to this project
@@ -79,7 +88,10 @@ directly. Required behaviour, in order:
    if sudo is not available non-interactively, print a single actionable line
    naming the exact install command the operator must run, and exit 1 — never
    hang on a prompt
-5. **Install the target's documented Python build requirements** into the venv
+5. **Install the target's documented Python build requirements AND its
+   development/test-suite requirements** (from Step 1) into the venv — installing
+   only the build requirements leaves the venv unable to collect the target's own
+   tests, which the Phase 7 gates depend on
 6. **Idempotency check**: if the venv's torch is already an editable install of
    `./src` at the current `git -C src rev-parse HEAD`, print "already built —
    skipping" and exit 0. Detect via `torch.version.git_version` compared to the

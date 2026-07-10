@@ -42,3 +42,35 @@ from CONTRIBUTING.md — apply them unconditionally:
 **Constraint:** Do not perform any GIT commits. These will be handled externally.
 
 **Constraint:** Use codecarbon for energy measurement in integration tests (`pip install codecarbon`; wrap benchmark runs with `EmissionsTracker`).
+
+**Constraint (harness venv must be able to collect PyTorch's own test suite):**
+`integration-test/requirements.txt` must include `expecttest` and `hypothesis`. The
+Phase 7 correctness gates run PyTorch's own tests (`src/test/...`, and
+`test/test_ops.py` for the OpInfo gate) with the harness venv interpreter, and
+`torch.testing._internal.common_utils` unconditionally does `import expecttest`
+(several suites also use `hypothesis`). These packages are listed in PyTorch's
+`src/requirements.txt` under "Install / Development extra requirements" — they are
+NOT in `requirements-build.txt`, so a build-requirements-only install leaves the venv
+unable to even collect the test suite, and every optimization cycle fails its gates
+with `ModuleNotFoundError: expecttest` regardless of the change under test (observed:
+14 of 15 iteration failures in one run).
+
+**Constraint (conftest must stub the uncompiled distributed modules):** because the
+build uses `USE_DISTRIBUTED=0`, `transformers.integrations.fsdp.is_fsdp_managed_module()`
+(called during `model.generate()`) triggers `import torch.distributed.fsdp` →
+`torch.testing._internal.distributed.fake_pg` → `torch._C._distributed_c10d`, which is
+not compiled — an `ImportError` at inference time. The harness `tests/conftest.py` MUST
+insert `sys.modules` stubs **before anything imports torch**: (1) a stub module for
+`torch._C._distributed_c10d` exposing no-op `FakeProcessGroup` and `FakeStore` classes;
+(2) a stub module for `torch.distributed.fsdp` exposing a no-op
+`FullyShardedDataParallel` class; then, after `import torch.distributed`, bind the fsdp
+stub as an attribute of `torch.distributed`. Do NOT replace the whole
+`torch.distributed` module — partial replacement breaks other attribute access (e.g.
+`torch.distributed.Backend`). This fix has been rediscovered by repair loops in two
+separate runs; generate it up front.
+
+**Constraint (transformers version):** pin `transformers` to a release verified to
+import and run `generate()` against this CPU-only, `USE_DISTRIBUTED=0` source build
+with the conftest stubs above. `transformers==4.47.1` is verified (archived
+`codeweave-run` branch); prefer it over nearby releases unless the chosen version has
+been re-verified against the build.
