@@ -111,7 +111,7 @@ def main():
     }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w") as f:
+    with open(args.output, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
     print(f"Microbench {spec['op']}: median={measurement.median * 1e6:.1f}us "
