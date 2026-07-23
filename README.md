@@ -1,205 +1,257 @@
 # CodeWeave
 
-CodeWeave is an automation system that drives the GitHub Copilot CLI across an **8-phase pipeline** to analyse an external codebase and then improve it under measurement. It clones a target repository and runs Copilot through two stages:
+**An autonomous code-optimization pipeline that ships only the changes it can prove faster** — every candidate clears a correctness gate and wins a statistical A/B verdict before it becomes a PR. No change lands on an agent's unverified claim.
 
-- **Documentation (Phases 1–4)** — generate an architecture book (+ PDF), Architecture Decision Records (+ PDF), a performance-measurement harness specification, and the runnable integration-test harness. Each phase is a generate→validate loop with file-based early exit: only the validator writes the completion marker, and the generator never self-certifies.
-- **Measurement & optimization (Phases 5–8)** — build the target from source (ccache-backed), establish a statistical performance baseline, run autonomous optimization cycles each gated by a correctness suite (import/smoke/unit/op-suite/differential-fuzz) and an A/B verdict, then synthesise the results into a ranked report with per-optimization PR drafts.
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+![Pipeline: GitHub Actions](https://img.shields.io/badge/pipeline-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
+![Status: Experimental](https://img.shields.io/badge/status-experimental-orange)
+![Target: PyTorch (CPU)](https://img.shields.io/badge/reference%20target-PyTorch%20CPU-EE4C2C)
 
-Every iteration's changes are committed and all run artifacts are saved to `proof/`. The pipeline runs as a set of **GitHub Actions workflows** (below). **Full per-phase documentation lives in [`docs/`](docs/index.md)** (the phase table below links into it).
+> _CodeWeave drives the GitHub Copilot CLI across an 8-phase pipeline: it clones a target repo, documents it from the ground up, builds a measurement harness, establishes a statistical baseline, then runs autonomous optimization cycles — each accepted or rejected by an A/B experiment, not by the agent that wrote it._
 
-## Workflow: CodeWeave
+<!-- VISUAL PLACEHOLDER:
+     Recommended hero asset — a terminal recording (or the Phase 8 report table) showing an
+     optimization cycle: correctness gate passing → paired A/B measurement → KEEP/REVERT verdict.
+     [ADD DEMO GIF] · [ADD LINK TO A REAL proof/ RUN] -->
 
-**Orchestrator:** `.github/workflows/codeweave.yml` — a thin dispatcher that wires the per-phase **reusable workflows** (`.github/workflows/phase-1-book.yml` … `phase-5-6-build-baseline.yml`) via `needs`/`if` (resume + skip logic), with `finalize` inline. Shared bootstrap (Node + Copilot CLI + `codeweave.config` + git identity) lives in the `.github/actions/codeweave-setup` composite action. Phases 7–8 are the separate auto-chaining workflows `phase-7-optimize.yml` / `phase-8-report.yml`; once Phase 6 produces a baseline, `codeweave.yml`'s `trigger-phase-7` job dispatches the first optimization cycle, so a single dispatch runs Phases 1–8 end-to-end.
+**Three things that make the verdicts trustworthy:**
 
-### Overview
+- **Correctness before performance.** Every change passes a six-stage gate — import + op check, integration smoke, a targeted unit test, OpInfo, an output diff, and a *blocking differential fuzz* against a golden captured on the base build — **before a single timing run is spent on it.**
+- **A real speedup, not noise.** A change is only KEEP when Welch's t-test rejects (`p < 0.05`) **and** the effect clears a measured noise floor (Minimum Detectable Effect). Phase 8 then applies a Holm–Bonferroni correction across every cycle and demotes any KEEP that doesn't survive the campaign-wide test.
+- **Auditable end to end.** Every generate/validate log, session transcript, gate diagnostic, and measurement record is written to `proof/`, with git history as the diff trail. Nothing is self-certified.
 
-Phases 1–6 run inside `codeweave.yml`; the Phase 7 optimization cycles (`phase-7-optimize.yml`) and the Phase 8 report (`phase-8-report.yml`) run as two dedicated, auto-chaining workflows. After Phase 6 produces a baseline, `codeweave.yml` automatically dispatches the first Phase 7 cycle, which self-chains through the remaining cycles and into Phase 8 — so one dispatch of `codeweave.yml` carries the run through all eight phases. The eight phases are summarised below — each row links to its full `docs/` page (gate, inputs, process, outputs).
+### In action
 
-| # | Phase | What it does |
-|---|-------|--------------|
-| 1 | [Book generation](docs/phase-1-book-generation.md) | Iterative generate→validate passes produce an architecture book + PDF. |
-| 2 | [ADR generation](docs/phase-2-adr-generation.md) | Produce Architecture Decision Records (pushed to the work branch) + PDF. |
-| 3 | [Harness design](docs/phase-3-harness-design.md) | Design the three-document performance-measurement harness specification. |
-| 4 | [Integration test generation](docs/phase-4-test-generation.md) | Generate the runnable harness (tests, `setup.sh`, `run.sh`, `_tools/`) behind a smoke-test gate. |
-| 5 | [Source build](docs/phase-5-source-build.md) | Copilot authors `build-source.sh`; the pipeline builds the target from source (ccache-backed). |
-| 6 | [Baseline execution](docs/phase-6-baseline-execution.md) | Deterministic baseline measurement (per-iteration latency + energy) → `baseline.json` + flamegraph. |
-| 7 | [Optimization cycles](docs/phase-7-optimization-cycles.md) | Per-optimization generate→build→correctness-gate→A/B verdict; auto-chains one optimization per dispatch. |
-| 8 | [Aggregate report](docs/phase-8-aggregate-report.md) | Synthesise all verdicts into a ranked report + per-optimization PR drafts. |
+Point CodeWeave at a repository and dispatch one workflow:
 
-> The optimization-cycle and Phase 8 workflows assume a self-hosted runner with the `src/` checkout, built `integration-test/.venv`, and warm ccache persisted from Phase 5/6 (`clean: false` checkout). Dispatch with `dry_run=true` first to smoke-test structure and the auto-chain.
-
-### Configuration
-
-Settings are stored in `.github/codeweave.config` and loaded at runtime:
-
-```env
-# External repository to process
-EXTERNAL_REPO_NAME=example
-EXTERNAL_REPO_URL=https://github.com/example/repo.git
+```bash
+# .github/codeweave.config — the whole run is configured here, nothing is hardcoded
+EXTERNAL_REPO_NAME=pytorch
+EXTERNAL_REPO_URL=https://github.com/your-org/pytorch
 EXTERNAL_REPO_BRANCH=main
-EXTERNAL_REPO_WORK_BRANCH=copilot-work
+PHASE7_MAX_OPTIMIZATIONS=5     # how many hotspots to attempt
 
-# Iteration settings
-PHASE1_MAX_ITERATIONS=10
-PHASE2_MAX_ITERATIONS=5
-PHASE3_MAX_ITERATIONS=5
-PHASE4_MAX_ITERATIONS=3
-PHASE6_BASELINE_RUNS=5
-
-# Model schedule per phase: model:iterations,model:iterations,...,model_for_remaining
-# The last entry without a count covers all remaining iterations.
-PHASE1_MODEL_SCHEDULE=claude-sonnet-4.6:3,claude-haiku-4.5
-PHASE2_MODEL_SCHEDULE=claude-haiku-4.5
-PHASE3_MODEL_SCHEDULE=claude-opus-4.6:1,claude-sonnet-4.6
-PHASE4_MODEL_SCHEDULE=claude-opus-4.6:1,claude-sonnet-4.6
-PHASE6_MODEL=claude-sonnet-4.6
-
-# Git commit author identity
-GIT_USER_NAME=github-actions[bot]
-GIT_USER_EMAIL=41898282+github-actions[bot]@users.noreply.github.com
+# one dispatch carries the run through all eight phases (Phase 7/8 auto-chain)
+gh workflow run codeweave.yml -f dry_run=true    # smoke-test the structure first
+gh workflow run codeweave.yml                     # then the real run
 ```
 
-| Setting | Description |
-|---|---|
-| `EXTERNAL_REPO_NAME` | Name of the external repository (used for organizing output) |
-| `EXTERNAL_REPO_URL` | HTTPS URL of the external Git repository |
-| `EXTERNAL_REPO_BRANCH` | Branch to clone from the external repository |
-| `EXTERNAL_REPO_WORK_BRANCH` | Branch name to create and work on (keeps original branch clean) |
-| `PHASE1_MAX_ITERATIONS` | Maximum number of Phase 1 (book generation) iterations (1-99) |
-| `PHASE2_MAX_ITERATIONS` | Maximum number of Phase 2 (ADR generation) iterations (1-99) |
-| `PHASE3_MAX_ITERATIONS` | Maximum number of Phase 3 (performance measurement) iterations (1-99) |
-| `PHASE4_MAX_ITERATIONS` | Maximum number of Phase 4 (integration test code generation) iterations (1-99) |
-| `PHASE6_BASELINE_RUNS` | Number of measurement runs to collect in Phase 6 (default 5) |
-| `PHASE1_MODEL_SCHEDULE` | Model schedule for Phase 1. Format: `model:count,...,model_for_remaining` (e.g. `claude-sonnet-4.6:3,claude-haiku-4.5`) |
-| `PHASE2_MODEL_SCHEDULE` | Model schedule for Phase 2. A single model name is valid (e.g. `claude-haiku-4.5`) |
-| `PHASE3_MODEL_SCHEDULE` | Model schedule for Phase 3. Format same as above (e.g. `claude-opus-4.6:1,claude-sonnet-4.6`) |
-| `PHASE4_MODEL_SCHEDULE` | Model schedule for Phase 4. Format same as above (e.g. `claude-opus-4.6:1,claude-sonnet-4.6`) |
-| `PHASE6_MODEL` | Model for Phase 6's single execution pass (no schedule needed, e.g. `claude-sonnet-4.6`) |
-| `PHASE5_MODEL` / `PHASE5_MAX_ITERATIONS` | Phase 5 source-build model and repair-iteration cap (default 3) |
-| `PHASE7_MAX_OPTIMIZATIONS` / `PHASE7_MAX_ITERATIONS` | Number of optimization points (default 5) and per-optimization repair-loop cap (default 3) |
-| `PHASE7_MODEL_SCHEDULE` / `PHASE7_SELECTION_MODEL` | Model schedule for the optimization passes; model for the hotspot-selection pass |
-| `PHASE7_FUZZ_REQUIRED` | 7f differential fuzz gate, blocking by default (`1`); set `0` only for an op that cannot be fuzzed |
-| `PHASE7_BASELINE_RUNS` / `PHASE7_MICROBENCH_MIN_SECONDS` | A/B measurement runs per side (default 5) and microbenchmark min run-time per side (default 10) |
-| `PHASE8_MODEL` | Model for the Phase 8 aggregate-report pass |
-| `GIT_USER_NAME` | Git commit author name |
-| `GIT_USER_EMAIL` | Git commit author email |
+Each optimization cycle ends in one of five recorded terminal states — only the first is PR-worthy:
 
-### Trigger
+| State | Measured? | Meaning |
+|-------|-----------|---------|
+| **KEEP** | yes | Significant improvement on the point's primary signal → Phase 8 drafts a PR |
+| **INVESTIGATE** | yes | Measured but ambiguous → report recommends manual re-measurement, not a PR |
+| **REVERT** | yes | A regression, or no detectable effect → not submitted (the conservative default) |
+| **FAILED** | no | The change was incorrect (failed the gate) → branch never pushed, never counted as a regression |
+| **INCOMPLETE** | no | Built and gated, but the stats couldn't be trusted → excluded, flagged for re-run |
 
-Manually triggered via `workflow_dispatch`. Optional inputs: `start_from_phase` (choices `1`–`6`) resumes from a specific phase (defaults to `1`; later phases still check that prerequisite artifacts exist); `dry_run` (boolean) skips Copilot invocations and overrides prerequisite checks to smoke-test workflow structure.
+**→ Start here:** [Quickstart](#quickstart) · [Full per-phase docs](docs/index.md) · [Executive summary](executive-summary.md) · [How it works](#how-it-works)
 
-### Permissions
+---
 
-- `contents: write` — required to commit and push changes back to the branch.
+## Why CodeWeave exists
+
+LLM coding agents are good at *proposing* performance changes and bad at *proving* them. Ask one to speed up a hot path and you get a confident diff and a confident claim — "~10% faster." Verifying that claim is the actual work: is the change even correct on the edge cases? Is the speedup real, or is it thermal drift and cache warmth? Would it survive being measured a second time? Multiply that by dozens of candidates and the verification cost swamps the generation cost.
+
+So agent-proposed optimizations mostly don't ship. The bottleneck was never generating ideas — it was **trusting them.**
+
+CodeWeave is built on one conviction: **the agent that writes a change must never be the thing that certifies it.** Generators propose; a deterministic, statistically rigorous pipeline disposes. The agent edits source and authors specs; the pipeline builds, fuzzes, measures, and rules. `ab_compare.py` is the single source of truth for every number. "Done" is always a file written by an independent check, never a claim.
+
+The long-term goal is **greener software**. Energy and carbon are measured directly (via CodeCarbon) and treated as the ultimate objective; per-iteration latency is the lever we can resolve precisely enough to act on. The result is an autonomous loop that can walk into an unfamiliar codebase, understand it, and improve it under measurement — leaving behind an audit trail a human reviewer can actually check.
+
+**Design philosophy, in five lines:**
+
+- Generators propose; independent validators dispose.
+- The pipeline owns truth and every commit.
+- Correctness before performance — always.
+- Measure the right thing, and only trust what you can resolve.
+- Energy is the goal; latency is the lever.
+
+---
+
+## Who it's for and what you'd use it for
+
+CodeWeave targets people responsible for large, performance-sensitive systems where "make it faster" is a real, recurring job:
+
+- **"Find and prove wins in a hot library."** Run the full pipeline against a compute-heavy codebase (the reference target is PyTorch on CPU) and get back a ranked set of PR-ready branches, each with a statistical verdict — plus honest REVERT/INVESTIGATE records for the ideas that didn't pan out.
+- **"Understand a codebase I inherited."** Phases 1–4 alone produce an architecture book (+ PDF), per-area Architecture Decision Records committed alongside the code, and a runnable measurement harness — grounded in the actual source, not generic assumptions.
+- **"Vet an agent's optimization before I trust it."** The correctness gate + drift-controlled A/B measurement is the review you'd otherwise do by hand for every candidate, run automatically and recorded.
+- **"Stand up repeatable performance measurement."** Phases 3–6 give you a fixed-time hot-loop harness, a statistical baseline with a computed noise floor, and a hotspot profile — reusable infrastructure independent of the optimization stage.
+
+---
+
+## Quickstart
+
+CodeWeave runs as **GitHub Actions workflows**, not a local CLI. Phases 5–8 build and measure a native target, so they require a persistent machine.
+
+### Prerequisites
+
+- A **self-hosted GitHub Actions runner** (`[self-hosted, Linux, X64]`) that persists the built `src/` tree, the editable `integration-test/.venv`, and a warm ccache between phases. `[VERIFY SUPPORTED PLATFORMS — reference target is Linux/x64 + PyTorch CPU]`
+- **GitHub Copilot CLI** access (installed automatically by the workflow via `npm i -g @github/copilot`).
+- Two fine-grained PATs stored as repository secrets:
+  - `COPILOT_TOKEN` — authenticates the Copilot CLI. Needs **Copilot user requests: Read** (account permission; no repo permissions).
+  - `PUSH_TOKEN` — **Contents: Read and write** on the *target* repo only (Phase 2 pushes ADRs; Phase 7 pushes optimization branches).
+- Toolchain for the target build. For the default PyTorch/CPU target that means **Python 3.12** specifically (see [`constraints/project.md`](constraints/project.md) for why — newer interpreters lack prebuilt wheels for the harness stack).
 
 ### Steps
 
-1. **Checkout** — Checks out this repository with full history and credential persistence.
-2. **Setup Node.js 22** — Required to install the Copilot CLI.
-3. **Install Copilot CLI** — Installs `@github/copilot` globally via npm.
-4. **Load configuration** — Sources `.github/codeweave.config`, extracts the first repo's configuration, and exports settings as environment variables.
-5. **Configure git identity** — Sets the git commit author from `codeweave.config` variables.
-6. **Clone external repository** — Clones the specified branch from the external repo (shallow, single branch) into `src`, then creates and checks out the work branch. The `src/` directory is excluded from git tracking via `.git/info/exclude`.
-7. **Run the CodeWeave pipeline (Phases 1–6)** — The `codeweave.yml` orchestrator calls a per-phase reusable workflow for each phase: Phases 1–4 are generate+validate loops with file-based early exit, Phase 5 builds the target from source, and Phase 6 collects the deterministic baseline. Each phase's gate, inputs, and outputs are documented in [`docs/`](docs/index.md) (see the phase table above). It finally writes `proof/final-status.md` summarising all phases.
-8. **Push** — Pushes all outer-repo commits back to the triggering branch.
+1. **Fork this repository.**
+2. **Configure the run** in [`.github/codeweave.config`](.github/codeweave.config) — target repo URL/branch, per-phase iteration caps, and per-phase model schedules. Nothing is hardcoded in the workflow logic.
+3. **Replace the constraints.** [`constraints/project.md`](constraints/project.md) ships with a sample constraint — swap in your target's real constraints (toolchain versions, build env vars, scope limits). `constraints/harness.md` and `constraints/harness-context.md` are optional target-specific inputs for Phase 3.
+4. **Add the two secrets** (`COPILOT_TOKEN`, `PUSH_TOKEN`).
+5. **Smoke-test the structure first:**
+   ```bash
+   gh workflow run codeweave.yml -f dry_run=true
+   ```
+   `dry_run` skips Copilot invocations and prerequisite checks, so you can confirm the eight-phase wiring and the Phase 7 auto-chain before spending model time.
+6. **Run it for real:**
+   ```bash
+   gh workflow run codeweave.yml
+   ```
 
-> **Phases 7–8 are separate workflows, dispatched automatically.** When Phase 6 produces a baseline, `codeweave.yml`'s `trigger-phase-7` job dispatches the first optimization cycle (Phase 7, `phase-7-optimize.yml`); each cycle self-chains to the next, and the last chains into the aggregate report (Phase 8, `phase-8-report.yml`) — one optimization per dispatch. No manual step is needed; to start them by hand instead, run `gh workflow run phase-7-optimize.yml -f optimization_index=1`. See the Overview above for what each does.
+### The "aha" moment
 
-### Proof Artifacts
+Watch a single dispatch cascade: Phases 1–6 document and baseline the target, then `codeweave.yml` automatically dispatches Phase 7, which optimizes one hotspot, gates it, measures a paired A/B, records a verdict — and dispatches the *next* cycle itself. The last cycle chains into Phase 8, which writes a ranked report and drafts a PR per PR-worthy win. You dispatched once; the pipeline ran an entire measurement campaign and handed you reviewable branches.
 
-Each iteration produces output files organized in `proof/`:
+Resume from any phase with `-f start_from_phase=N` (1–6). Full per-phase gates, inputs, and outputs: **[`docs/index.md`](docs/index.md)**.
 
-| File | Contents |
-|---|---|
-| `1-book-generation-N.md` | Generate pass output log for Phase 1 iteration N |
-| `1-book-generation-session-N.md` | Generate pass session transcript for Phase 1 iteration N |
-| `1-book-validation-N.md` | Validate pass output log for Phase 1 iteration N |
-| `1-book-validation-session-N.md` | Validate pass session transcript for Phase 1 iteration N |
-| `1-book-validation-report-N.md` | Copy of `book/BOOK-VALIDATION.md` after Phase 1 iteration N |
-| `2-adrs-generation-N.md` | Generate pass output log for Phase 2 iteration N |
-| `2-adrs-generation-session-N.md` | Generate pass session transcript for Phase 2 iteration N |
-| `2-adrs-validation-N.md` | Validate pass output log for Phase 2 iteration N |
-| `2-adrs-validation-session-N.md` | Validate pass session transcript for Phase 2 iteration N |
-| `2-adrs-validation-report-N.md` | Copy of `src/ADR-VALIDATION.md` after Phase 2 iteration N |
-| `3-harness-generation-N.md` | Generate pass output log for Phase 3 iteration N |
-| `3-harness-generation-session-N.md` | Generate pass session transcript for Phase 3 iteration N |
-| `3-harness-validation-N.md` | Validate pass output log for Phase 3 iteration N |
-| `3-harness-validation-session-N.md` | Validate pass session transcript for Phase 3 iteration N |
-| `3-harness-validation-report-N.md` | Copy of `integration-test/HARNESS-VALIDATION.md` after Phase 3 iteration N |
-| `4-tests-generation-N.md` | Generate pass output log for Phase 4 iteration N |
-| `4-tests-generation-session-N.md` | Generate pass session transcript for Phase 4 iteration N |
-| `4-tests-validation-N.md` | Validate pass output log for Phase 4 iteration N |
-| `4-tests-validation-session-N.md` | Validate pass session transcript for Phase 4 iteration N |
-| `4-tests-validation-report-N.md` | Copy of `integration-test/TESTS-VALIDATION.md` after Phase 4 iteration N |
-| `5-build-source-N.md` / `5-build-source-session-N.md` | Phase 5 build authoring pass log / transcript (attempt N) |
-| `5-build-output-N.log` | Phase 5 build execution output (attempt N) |
-| `6-baseline-run-N.log` | Phase 6 baseline measurement run N output |
-| `6-trace.log` | Phase 6 tracing-pass output |
-| `6-repair-N.md` / `6-repair-session-N.md` | Phase 6 repair pass N log / transcript (if any) |
-| `final-status.md` | Summary of all phases: PDF generation, ADR coverage, strategy status, test code status, and baseline execution status |
+---
 
-Git commit history provides the natural diff trail between iterations.
+## Core capabilities
 
-### Required Secrets
+### Understand an unfamiliar codebase (Phases 1–4)
 
-| Secret | Purpose |
-|---|---|
-| `COPILOT_TOKEN` | Fine-grained PAT used to authenticate the Copilot CLI (`GH_TOKEN` in the step environment). Needs the **Copilot user requests: Read** user permission (Account permissions — no repository permissions required). |
-| `PUSH_TOKEN` | Fine-grained PAT used to push to the target repository — Phase 2 pushes ADR changes to the work branch, and Phase 7 pushes each gate-passing optimization branch. Needs the **Contents: Read and write** repository permission on the target repository only. |
+**What it enables:** an architecture book (+ PDF via Pandoc → Typst), per-area ADRs committed into the target's source tree, and a runnable measurement harness — all grounded in the real source.
 
-## Work Definition and Constraints
+**Why it matters:** every later measurement decision traces back to a documented claim, so the harness reflects the actual system instead of the model's priors.
 
-The workflow improves code based on tasks and constraints you define:
+**How it stays honest:** each phase is a **generate → validate loop**. A generate pass edits artifacts; a *separate* validate pass checks them against an explicit checklist and is the **only** thing allowed to write the phase's completion marker. The validator writes a *Required Actions* list, the next generator burns that list down first, and durable state files record the high-water mark — so the manuscript expands and deepens across iterations instead of churning.
 
-- **`work/1-generate-book.md`** — Phase 1 generation prompt. Copilot writes/expands chapters each iteration without self-certifying completion.
-- **`work/1-validate-book.md`** — Phase 1 validation prompt. Run after each generation pass; enforces all quality gates and exclusively writes `book/manuscript-complete.md` on PASS.
-- **`work/2-generate-adrs.md`** — Phase 2 generation prompt. Directs Copilot to generate per-folder `ADR.md` files in `./src` using the book markdown sources as reference.
-- **`work/2-validate-adrs.md`** — Phase 2 validation prompt. Run after each ADR generation pass; validates coverage against the scope map and exclusively writes `src/adrs-complete.md` on PASS.
-- **`work/3-generate-harness.md`** — Phase 3 generation prompt. Directs Copilot to produce a three-tier performance measurement document set: `integration-test/AGENTS.md` (permanent harness operating rules), `integration-test/SOURCE-UNDER-INVESTIGATION.md` (target-specific profile derived from the book, ADRs, and constraints), and `integration-test/WORK.md` (execution agent checklist).
-- **`work/3-validate-harness.md`** — Phase 3 validation prompt. Run after each harness design pass; validates all three harness documents and exclusively writes `integration-test/harness-complete.md` on PASS.
-- **`work/4-generate-tests.md`** — Phase 4 generation prompt. Directs Copilot to read `integration-test/AGENTS.md`, `SOURCE-UNDER-INVESTIGATION.md`, and `WORK.md` for context, check `./src/` for existing build documentation, and generate all test files, `setup.sh`, `run.sh`, and `_tools/` helpers. Instructs the generator to derive all install commands and environment variables from `SOURCE-UNDER-INVESTIGATION.md` rather than from general knowledge.
-- **`work/4-validate-tests.md`** — Phase 4 validation prompt. Run after each code generation pass; validates all generated files against `SOURCE-UNDER-INVESTIGATION.md`, reads `integration-test/smoke-test-report.md` as part of Check 1, and exclusively writes `integration-test/tests-complete.md` on PASS.
-- **`work/6-repair-tests.md`** — Phase 6 repair agent prompt. Invoked only when a probe run of `run.sh` fails; fixes the specific runtime error in `tests/` or `_tools/`. Baseline collection itself (build via `setup.sh`, `PHASE6_BASELINE_RUNS` runs of `run.sh`, `_tools/ab_compare.py --mode baseline`) is deterministic pipeline logic, not a prompt.
-- **`work/5-build-source.md`** — Phase 5 prompt. Copilot *authors* `integration-test/build-source.sh`; the pipeline *executes* it to build the target from source (the agent does not run the build itself).
-- **`work/7-select-hotspots.md`** — Phase 7 hotspot-selection prompt (index 1 only). Reads `profiler-summary.md` + the ADR index and writes `integration-test/optimization-plan.md` (ranked target ops + per-point measurement path).
-- **`work/7-generate-optimization.md`** — Phase 7 optimization prompt. Implements one source change in `./src` and authors the gate-7f differential-fuzz spec; `work/fuzz-examples/opt{1,2}_fuzz.py` are worked templates it references.
-- **`work/8-aggregate-report.md`** — Phase 8 prompt. Synthesises every Phase 7 verdict into a ranked report + per-optimization PR drafts — an authoring task: it does not build, run, or measure (the verdicts are already computed by `ab_compare.py`).
-- **`constraints/project.md`** — Repository-specific constraints and requirements that must be respected (e.g., framework versions, architecture decisions, tech stack limitations). The default includes a sample constraint; **when forking, replace it with your actual constraints**.
-- **`constraints/harness.md`** — *(optional)* Target execution constraints for Phase 3: hardware requirements, scope limitations, time budgets, and isolation rules. Phase 3 incorporates this content into `integration-test/SOURCE-UNDER-INVESTIGATION.md`.
-- **`constraints/harness-context.md`** — *(optional)* Domain context for Phase 3 scenario and observability design. Provides target-specific knowledge about what to instrument, what representative scenarios look like, and known performance-sensitive paths.
+**Limitation:** requires enough model budget for multiple passes per phase; iteration caps are set per phase in `codeweave.config`.
 
+### Measure with a trustworthy substrate (Phases 5–6)
 
-## Key Files to Know
+**What it enables:** the target built *from source* (ccache-backed), plus a statistical baseline (`baseline.json`) and a hotspot profile.
 
-| File | Purpose |
-|---|---|
-| `.github/workflows/codeweave.yml` | Orchestrator (glue): dispatch + `needs`/`if` calling the per-phase reusable workflows; `finalize` inline |
-| `.github/workflows/phase-*.yml` | Per-phase reusable workflows (1–6) + `phase-7-optimize.yml` / `phase-8-report.yml` |
-| `.github/actions/codeweave-setup/action.yml` | Composite action: shared bootstrap (Node + Copilot CLI + `codeweave.config` + git identity) |
-| `.github/codeweave.config` | Runtime configuration (external repo, branch, iterations, git identity) |
-| `.github/scripts/generate-indexes.js` | Generates `book/BOOK-INDEX.md` (Phase 1) and `src/ADR-INDEX.md` (Phase 2) |
-| `work/1-generate-book.md` | Phase 1 generation prompt (no self-certification) |
-| `work/1-validate-book.md` | Phase 1 validation prompt (exclusively owns `manuscript-complete.md`) |
-| `work/2-generate-adrs.md` | Phase 2 generation prompt (no self-certification) |
-| `work/2-validate-adrs.md` | Phase 2 validation prompt (exclusively owns `adrs-complete.md`) |
-| `work/3-generate-harness.md` | Phase 3 generation prompt (no self-certification) |
-| `work/3-validate-harness.md` | Phase 3 validation prompt (exclusively owns `harness-complete.md`) |
-| `work/4-generate-tests.md` | Phase 4 generation prompt (no self-certification) |
-| `work/4-validate-tests.md` | Phase 4 validation prompt (exclusively owns `tests-complete.md`) |
-| `work/6-repair-tests.md` | Phase 6 repair agent prompt — fixes runtime errors in `tests/`/`_tools/` (baseline collection is deterministic pipeline logic) |
-| `work/5-build-source.md` | Phase 5 prompt — authors `build-source.sh` (pipeline executes it) |
-| `work/7-select-hotspots.md` / `work/7-generate-optimization.md` | Phase 7 hotspot selection (→ `optimization-plan.md`) and per-optimization implementation + 7f fuzz spec |
-| `work/8-aggregate-report.md` | Phase 8 prompt — ranked aggregate report + PR drafts |
-| `integration-test/harness-manifest.json` | Machine-readable toolchain manifest (venv layout, smoke-check commands, profiler enable-env, hotspot-report path, incremental-build recipe, and op-suite/import-op gate commands) the deterministic pipeline reads instead of hardcoding Python/pytest/venv. Emitted by Phase 4 from `SOURCE-UNDER-INVESTIGATION.md §08`; a target whose toolchain matches the built-in defaults emits a no-op manifest. |
-| `integration-test/_tools/ab_compare.py` | A/B + baseline statistics (v2.2: Welch's t-test + MDE floor, directional, measurement-path-aware verdict; `--mode family` Holm-Bonferroni) |
-| `integration-test/_tools/op_microbench.py` / `diff_fuzz.py` | Per-op microbenchmark (framework-native benchmark timer) and the 7f differential-fuzz gate driver |
-| `constraints/project.md` | Repository-specific constraints and requirements (customize for your fork) |
-| `constraints/harness.md` | *(optional)* Target execution constraints (hardware, scope, time budgets) consumed by Phase 3 |
-| `constraints/harness-context.md` | *(optional)* Domain context for Phase 3 scenario and observability design |
-| `proof/` | Output artifacts directory (auto-created): run logs, session transcripts, final status |
-| `.git/info/exclude` | Excludes `src/` from git tracking (auto-configured by workflow) |
+**Why it matters:** A/B comparisons compare two builds of the *same* source tree, and the baseline computes a **noise floor** — a coefficient of variation and a Minimum Detectable Effect — that every later verdict is held to.
+
+**Key design decision:** the workload is a **fixed-time hot loop**, so wall-clock time carries no signal (a faster build just completes more iterations). **Every verdict uses per-iteration metrics** (`median_iter_ms`, iterations, joules/iter) — never wall clock.
+
+### Optimize under a correctness-first gate (Phase 7)
+
+**What it enables:** one optimization per dispatch — generate the change, incrementally rebuild (with rebuild verification so a zero-compile edit can't slip through), run the **7a–7f correctness gate**, and only *then* measure a paired A/B.
+
+**Why it matters:** the change must be provably *correct* — including a blocking differential fuzz against a base-build golden — before any timing run is spent. The A-side base is re-measured **every cycle**, back-to-back with the variant, to cancel machine drift over a long run.
+
+**Two measurement paths:** ops whose end-to-end effect falls below the noise floor by construction are judged on a per-op microbenchmark (`torch.utils.benchmark`); others on end-to-end latency. The verdict logic is path-aware and directional (regressions tested first).
+
+**Limitation:** energy is measured and reported but **does not gate** — CodeCarbon's resolution is too coarse to judge a single optimization, so a latency win that regresses energy still KEEPs and is merely flagged.
+
+### Report with campaign-wide rigor (Phase 8)
+
+**What it enables:** a ranked report plus a drafted PR per PR-worthy optimization.
+
+**Why it matters:** running many cycles at `α = 0.05` inflates the odds of at least one false KEEP, so Phase 8 applies a **Holm–Bonferroni correction** across all cycles and demotes KEEPs that don't survive.
+
+**Limitation:** Phase 8 *drafts* PRs; opening them is a deliberate human step. `INVESTIGATE` is a classification, not an action — the system surfaces ambiguous candidates and the reason (`decision_signal`), but never re-measures or investigates on its own.
+
+---
+
+## How it works
+
+One `workflow_dispatch` runs eight gated phases. Phases 1–6 run inside `codeweave.yml`; Phases 7 and 8 are dedicated **auto-chaining** workflows — Phase 7 handles one optimization per dispatch and triggers the next, and the last chains into Phase 8.
+
+```mermaid
+flowchart TD
+    start(["workflow_dispatch"]) --> clone["Clone target into src/ · create work branch"]
+    clone --> P1
+    subgraph gen["Phases 1-4 · generate → validate loops"]
+        P1["1 · Book"] --> P2["2 · ADRs"] --> P3["3 · Harness design"] --> P4["4 · Integration tests"]
+    end
+    P4 --> P5["5 · Build from source (ccache)"]
+    subgraph meas["Phases 5-8 · measure & optimize"]
+        P5 --> P6["6 · Statistical baseline → baseline.json"]
+        P6 --> P7["7 · Optimize one point<br/>gate 7a–7f → paired A/B → verdict"]
+        P7 --> more{"more points?"}
+        more -- "yes · auto-chain N+1" --> P7
+        more -- no --> P8["8 · Aggregate report + PR drafts"]
+    end
+    P8 --> done(["ranked report + PR-worthy branches"])
+```
+
+The generate → validate loop is the structural backbone of Phases 1–4:
+
+```mermaid
+flowchart TD
+    enter(["enter phase"]) --> del["Delete completion marker"]
+    del --> genp["Generate pass · Copilot edits artifacts"]
+    genp --> smoke{"Phase 4 only:<br/>smoke test?"}
+    smoke -- fail --> report["Write findings · skip validator"] --> iter
+    smoke -- "pass / N/A" --> val["Validate pass · writes marker on PASS"]
+    val --> marker{"marker present?"}
+    marker -- yes --> exitok(["early exit"])
+    marker -- no --> iter{"iterations left?"}
+    iter -- yes --> del
+    iter -- no --> stopmax(["stop — max iterations"])
+```
+
+**Operating rules that make it dependable:**
+
+- **The pipeline owns every commit.** Copilot runs non-interactively (`--no-ask-user`) and is denied git in every phase except the Phase 7 optimization agent (which works on its own branch and reviews its diff).
+- **Markers are deleted before each generate pass**, so a stale "done" file can never short-circuit the next cycle.
+- **Toolchain lives in a manifest, not the code.** Phase 4 emits `integration-test/harness-manifest.json` (venv layout, smoke checks, profiler enable-env, hotspot-report path, gate commands) so the deterministic pipeline reads the target's toolchain instead of hardcoding Python/pytest/venv — the seam intended to carry the engine beyond the PyTorch reference target.
+
+Full detail — every gate, input, and output per phase — is in **[`docs/`](docs/index.md)** and the **[executive summary](executive-summary.md)**.
+
+---
+
+## How it's different
+
+CodeWeave isn't a coding assistant and isn't a benchmark runner — it's the pipeline between them that makes an agent's performance claims trustworthy.
+
+| | Ask an agent directly | Hand-roll a benchmark + review | **CodeWeave** |
+|---|---|---|---|
+| Correctness check before measuring | You do it, per change | You do it | Automated 6-stage gate incl. differential fuzz |
+| Speedup vs. noise | Agent's word | Manual stats, if any | Welch's t-test **and** measured MDE floor |
+| Machine drift over a long run | Ignored | Manual re-runs | Contemporaneous A/B, base re-measured each cycle |
+| False positives across many changes | Unaddressed | Rarely corrected | Holm–Bonferroni across the campaign |
+| Output | A diff + a claim | A number you produced | Ranked, gated PR branches + full `proof/` trail |
+| Self-certification | The agent says "done" | — | Only an independent validator writes "done" |
+
+This is a positioning of *discipline*, not a knock on coding agents — CodeWeave uses one (GitHub Copilot CLI) as its generator. The difference is what happens to a change after it's written.
+
+---
+
+## Project status
+
+CodeWeave is **experimental**. It is a working, end-to-end pipeline that has been built and iterated against a real target (PyTorch, CPU), but it has not been hardened for arbitrary repositories or published with reproducible headline results.
+
+- **Working today:** the full eight-phase run against the reference target — generate→validate documentation loops, source build, statistical baseline, correctness-gated optimization cycles with paired A/B verdicts, and the aggregate report with PR drafts.
+- **Experimental:** portability beyond the PyTorch/CPU reference target. The manifest seam is designed for it, but other toolchains are unverified. `[VERIFY portability on a second target]`
+- **Planned / manual by design:** opening PRs (Phase 8 drafts them); acting on `INVESTIGATE` results (surfaced, never auto-investigated).
+- **Known limitations:**
+  - Requires a **self-hosted, persistent runner** — Phases 6–8 reuse the build and venv in place; there is no ephemeral-runner path.
+  - Requires GitHub Copilot CLI access and two fine-grained PATs.
+  - Energy/carbon is **measured and reported but not gating** (resolution too coarse per change).
+  - Model and CI time cost scales with iteration caps and optimization count.
+  - No published benchmark results yet. `[ADD BENCHMARK — headline results from a real run]`
+
+> **Maturity warning:** treat CodeWeave as a research-grade automation harness. Review every drafted PR and read the `proof/` trail before shipping anything it produces.
+
+---
+
+## Documentation, community & trust
+
+- **Documentation:** per-phase reference in [`docs/index.md`](docs/index.md); the design rationale in [`executive-summary.md`](executive-summary.md).
+- **Examples:** prompt and constraint files under [`work/`](work) and [`constraints/`](constraints); a sample run's artifacts appear in `proof/` (auto-created). `[ADD LINK TO A PUBLISHED EXAMPLE RUN]`
+- **Roadmap:** `[ADD ROADMAP LINK]` — near-term focus is verifying portability to a second target via the manifest seam.
+- **Contributing:** `[ADD CONTRIBUTING.md]` — issues and PRs welcome; please include the relevant `proof/` artifacts when reporting pipeline behavior.
+- **Support:** `[ADD SUPPORT CHANNEL — GitHub Issues / Discussions]`
+- **Security:** the pipeline handles two PATs and pushes branches to a target repo; scope tokens minimally as described in [Prerequisites](#quickstart). `[ADD SECURITY.md / disclosure policy]`
 
 ## License
-Copyright (C) 2026 Hightech ICT B.V.
 
-This project is licensed under the GNU General Public License v3.0 or later. See the LICENSE file for details.
+Copyright © 2026 Hightech ICT B.V.
+
+Licensed under the **GNU General Public License v3.0 or later**. See [`LICENSE`](LICENSE).
