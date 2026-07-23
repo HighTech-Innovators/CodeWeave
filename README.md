@@ -111,7 +111,7 @@ You will need the target's own build and test toolchain available on the runner.
 
 ### Steps
 
-Fork this repository. Configure the run in [`.github/codeweave.config`](.github/codeweave.config), which holds the target repository URL and branch, the per-phase iteration caps, and the per-phase model schedules; none of this is hardcoded in the workflow logic. Replace the sample constraint in [`constraints/project.md`](constraints/project.md) with your target's real constraints, such as toolchain versions, build environment variables, and scope limits, and note that `constraints/harness.md` and `constraints/harness-context.md` are optional target-specific inputs for the harness-design phase. Add the two secrets. Then smoke-test the structure before spending model time:
+Fork this repository. Configure the run in [`.github/codeweave.config`](.github/codeweave.config), which holds the target repository URL and branch, the per-phase iteration caps, and the per-phase model schedules; none of this is hardcoded in the workflow logic. Fill in the constraint template in [`constraints/project.md`](constraints/project.md) with your target's real constraints, such as toolchain versions, build environment variables, and scope limits, and note that `constraints/harness.md` and `constraints/harness-context.md` are optional target-specific templates for the harness-design phase. Add the two secrets. Then smoke-test the structure before spending model time:
 
 ```bash
 gh workflow run codeweave.yml -f dry_run=true
@@ -237,7 +237,7 @@ Several limitations are worth stating plainly. The pipeline requires a self-host
 
 ## Documentation, community, and trust
 
-The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt and constraint files live under [`work/`](work) and [`constraints/`](constraints), and a sample run's artifacts appear in `proof/`, which is created automatically. `[ADD LINK TO A PUBLISHED EXAMPLE RUN]`
+The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt files live under [`work/`](work), the language-neutral constraint templates you fill in for your target live under [`constraints/`](constraints), and a sample run's artifacts appear in `proof/`, which is created automatically. `[ADD LINK TO A PUBLISHED EXAMPLE RUN]`
 
 The near-term direction is set out in [`ROADMAP.md`](ROADMAP.md), whose current focus is publishing a real run and verifying portability across additional targets through the manifest seam. Contributions are welcome; please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, and include the relevant `proof/` artifacts when you report pipeline behavior. For support, open a [GitHub issue](../../issues). `[ADD DISCUSSIONS LINK IF ENABLED]` Because the pipeline handles two access tokens and pushes branches to a target repository, please scope the tokens minimally as described under [Prerequisites](#quickstart) and report any vulnerability through [`SECURITY.md`](SECURITY.md).
 

@@ -5,93 +5,88 @@
 > This context supplements the book and ADRs — it does not override what the source code and ADRs actually show.
 > Delete or comment out any section that does not apply.
 
+The sections below are prompts for the kind of domain context Phase 3 benefits from. They
+are language and framework neutral. Fill each one in for your target, or remove it.
+
 ---
 
 ## Codebase Purpose
 
-PyTorch is a machine learning framework that provides tensor computation and automatic differentiation, primarily used for neural network training and inference. Its CPU inference path — tensor dispatch, operator kernels, autograd graph traversal, and BLAS-backed linear algebra — is the primary subject of this analysis.
+Describe what the target does and which execution path is the subject of this analysis. Be
+specific about the layer under investigation (for example a request-handling path, a
+compute kernel, a parsing stage, or an inference loop) rather than the project as a whole.
 
-The representative use case is text-generation inference: a transformer-based language model receives tokenised input, executes a forward pass through its layers, and produces output tokens in a sampling loop. This exercises PyTorch's dispatch stack, memory allocator, and linear algebra backends end-to-end on CPU.
+Then describe the representative use case in one or two sentences: the concrete workload
+that exercises that path end to end. Phase 3 turns this into the integration scenario.
 
 ---
 
 ## Observability Focus Areas
 
-- **Operator dispatch**: routes Python-level tensor operations to C++ kernels — high call frequency, low latency budget; dominant source of per-token overhead for small tensors
-- **Autograd engine**: builds and traverses the computation graph — relevant even in `torch.no_grad()` contexts due to graph teardown overhead
-- **Memory allocator**: tensor allocation and deallocation patterns — allocation pressure increases with sequence length and batch size
-- **BLAS/MKL-DNN threading**: controls parallelism for matrix multiplications — thread pool saturation or underutilisation shows up as CPU underutilisation on multi-core runners
-- **Python/C++ boundary crossings**: the overhead of each sampling step includes Python dispatch overhead; repeated for every generated token
+List the subsystems whose behaviour dominates the path above, and for each say why it
+matters for performance or energy. Aim for the handful of areas a profiler would light up,
+for example:
+
+- A high-frequency, low-latency-budget layer that dominates per-unit overhead.
+- A memory allocation pattern whose pressure grows with input size.
+- A parallelism or threading control whose saturation or underutilisation shows up as wasted CPU.
+- A boundary crossing (process, language, or I/O) repeated on every unit of work.
 
 ---
 
 ## Representative Scenario Guidance
 
-The integration scenario is a **CPU text-generation inference loop**. Phase 4 must generate this test such that all scenario parameters are loaded from configuration — not hardcoded. This preserves CodeWeave's generic character: swapping to a different model or prompt set requires only a configuration change, not a code change.
+Describe the integration scenario Phase 4 should build. State clearly that **all scenario
+parameters must be loaded from configuration, not hardcoded**, so swapping inputs requires
+only a configuration change. This preserves CodeWeave's generic character.
 
 ### Configuration sources
 
+List each scenario parameter, where it is read from, and its default:
+
 | Parameter | Source | Default |
 |-----------|--------|---------|
-| Model name | `GENAI_MODEL` environment variable | `distilgpt2` |
-| Prompts | `integration-test/scenarios/prompts.json` (JSON array of strings) | 8 prompts below |
-| Time limit (seconds) | `GENAI_MAX_SECONDS` environment variable | `30` |
-| Generation seed | Hardcoded `torch.manual_seed(42)` | — |
-
-Phase 4 must generate the `integration-test/scenarios/prompts.json` file containing the default prompt set below. This file is the hand-off point between scenario configuration and test code.
+| *example: workload size* | *environment variable* | *value* |
+| *example: input set* | *a JSON file the phase generates* | *value* |
+| *example: time limit* | *environment variable* | *value* |
 
 ### Hot loop structure
 
+Sketch the measured loop in pseudocode so Phase 4 knows what to profile and what to keep
+outside the profiled scope:
+
 ```
-load model (from GENAI_MODEL) and tokenizer — outside profiled scope
-start cProfile, torch.profiler, tracemalloc
-while wall_clock < GENAI_MAX_SECONDS:
-    prompt = prompts[iteration % len(prompts)]
-    tokenize(prompt) → input_ids
-    model.generate(input_ids, max_new_tokens=60, do_sample=True, temperature=0.7,
-                   top_k=50, repetition_penalty=1.3)
-    decode newly generated tokens only
+set up inputs and dependencies — outside profiled scope
+start profiler(s) and memory tracking
+while wall_clock < time_limit:
+    pick the next input
+    run one unit of the workload under investigation
+    record the result
     accumulate iteration count and output log
-stop cProfile, torch.profiler, tracemalloc
-export Chrome trace (torch.profiler)
-write cProfile stats
+stop profiler(s) and memory tracking
+export traces and profile stats
 ```
 
-Energy tracking is handled by the `conftest.py` CodeCarbon fixture (per benchmark-marked test invocation).
+State how energy tracking is wired in (for example a measurement fixture invoked per
+benchmark-marked test).
 
-### Default prompt set
+### Default input set
 
-Phase 4 writes the following to `integration-test/scenarios/prompts.json`:
-
-```json
-[
-  "Today a museum curator took the morning train from Amsterdam to Rotterdam. She carried a folder of restoration notes and a thermos of cold coffee.",
-  "Meanwhile a student with very little money was backpacking through Belgium, sleeping in hostels and eating bread from supermarket shelves.",
-  "A startup founder in Berlin was on her third cup of espresso, debugging a production incident that had started at 3 am.",
-  "In a small fishing village on the coast of Portugal, an elderly fisherman repaired his nets by hand while his grandson watched silently.",
-  "A software engineer in Tokyo was refactoring a legacy codebase, removing a comment that said 'fix this later' written six years ago.",
-  "A nurse finishing a night shift in a London hospital sat in the break room, staring at a lukewarm cup of tea, thinking about nothing in particular.",
-  "A journalist in Cairo was transcribing an interview, pausing every few seconds to replay a phrase she could not quite hear on the recording.",
-  "A retired teacher in rural France was writing a letter by hand to her former student, now living in Canada, about the summer storms that had flattened her garden."
-]
-```
-
-These prompts exercise: tokenization with varying lengths, multi-layer forward pass, autoregressive sampling, and output decoding. They are replaceable by editing `integration-test/scenarios/prompts.json` — no code change required.
+If the scenario needs a fixed input set, describe it and note that Phase 4 writes it to a
+configuration file that is the hand-off point between scenario configuration and test code.
+State that the inputs are replaceable by editing that file, with no code change required.
 
 ---
 
 ## Known Performance Hotspots
 
-- Kernel dispatch overhead for small tensors — every token step calls many aten ops with small shapes
-- Memory allocation in the generation loop — a new tensor is allocated per output token
-- Autograd graph overhead — `torch.no_grad()` suppresses gradient tracking but not all associated overhead
-- BLAS thread pool utilisation — `torch.set_num_threads()` behaviour under sustained load affects throughput reproducibility
+List any hotspots already suspected from the source, ADRs, or prior runs, with a one-line
+reason for each. These seed the hotspot search; they do not constrain it.
 
 ---
 
 ## Out-of-Scope Subsystems
 
-- CUDA/GPU backends: excluded by `constraints/project.md` (CPU-only execution)
-- Distributed training (`torch.distributed`): out of scope for single-process inference analysis
-- Model loading and tokenizer initialisation: excluded from the profiled hot loop (one-time setup cost, not inference bottleneck)
-- Third-party vendored code under `third_party/` in the source tree: not owned by this project
+List the subsystems explicitly excluded from analysis and why (for example excluded by a
+scope constraint in `constraints/project.md`, one-time setup cost rather than steady-state
+work, or third-party vendored code the project does not own).

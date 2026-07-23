@@ -1,76 +1,64 @@
 # Constraints
 
-**Constraint:** Use PyTorch with CPU only.
+This file pins the hard requirements for optimizing **your** target. CodeWeave does not
+assume a language, runtime, or package manager, so everything specific to your codebase
+lives here and the pipeline reads it from the generated manifest rather than hardcoding
+it. Replace every placeholder below with your target's real values, and delete any section
+that does not apply.
 
-**Constraint (Python interpreter):** Build and run the harness against **Python 3.12**.
-The venv MUST be created with the `python3.12` interpreter explicitly — never the ambient
-`python3`. On this runner `python3` is a newer release (3.14) that has **no prebuilt PyPI
-wheels** for several pinned harness dependencies (e.g. `tokenizers`), which forces source
-builds that then fail against the runner's C23/GCC-15 toolchain (pyo3 ≤3.13, oniguruma
-C). Python 3.12 is within PyTorch's supported range (`setup.py` `python_requires`) **and**
-has full wheel coverage for the entire harness stack, so the install uses only prebuilt
-wheels — no Rust/C compilation, and reproducible run-to-run. If `python3.12` is not on
-PATH, the build script must **fail with the exact install command** (`apt-get install -y
-python3.12 python3.12-venv python3.12-dev`) rather than silently using another interpreter.
-> Adjust the version only to another PyTorch-supported release that also has full wheel
-> coverage for the harness dependencies — confirm the interpreter is installed on the
-> runner before changing.
+Write each constraint as a single imperative statement prefixed with `**Constraint:**` so
+the harness-design and build phases can parse them individually. Keep the "why" attached to
+anything non-obvious; several of these categories exist because a repair loop rediscovered
+the same fix more than once.
 
-**Constraint:** When building PyTorch from source (Phase 5), the Python development
-headers for the build interpreter must be installed before building (not discoverable from
-CONTRIBUTING.md): `python3.12-dev` (provides `Python.h`; without it CMake cannot build
-`torch._C` even when `BUILD_PYTHON=1` is set — it silently falls back to `BUILD_PYTHON=OFF`).
-Keep the `-dev` package version matched to the interpreter above.
+**Constraint (runtime and scope):** State the runtime, backend, and hardware scope the
+analysis targets, and exclude everything out of scope. Example shape: "Target the CPU
+inference path only; exclude GPU, distributed, and quantization backends." Keeping the
+scope narrow makes the baseline reproducible and the hotspot search tractable.
 
-**Constraint:** When building PyTorch from source (Phase 5), the following environment
-variables must be set before running `pip install -e .`. These are not all discoverable
-from CONTRIBUTING.md — apply them unconditionally:
+**Constraint (interpreter or toolchain version):** Pin the exact interpreter, compiler, or
+SDK version the harness builds and runs against, and say how to obtain it. Pin a version
+that has full prebuilt-artifact coverage for your dependency stack so the install does not
+fall back to source builds against an unexpected toolchain. If the required version is not
+present, the build script should fail with the exact install command rather than silently
+using whatever is on PATH.
+
+**Constraint (build prerequisites):** List any development headers, system libraries, or
+build tools that must be installed before the target builds, especially ones not documented
+in the target's own contributing guide. Missing prerequisites often fail silently by
+disabling a component rather than erroring, so name each one and the symptom of its absence.
+
+**Constraint (build configuration):** If the target is built from source, list the exact
+build flags or environment variables to set and why each one matters. Prefer a table so the
+build phase applies them unconditionally:
 
 | Variable | Value | Why |
 |---|---|---|
-| `BUILD_PYTHON` | `1` | CMake defaults this to OFF; without it `libtorch_python.so` and `torch._C` are not compiled, making the package unimportable |
-| `BUILD_TEST` | `0` | Skip building test binaries (~30% of build time) |
-| `USE_CUDA` | `0` | CPU-only build |
-| `USE_DISTRIBUTED` | `0` | Not needed for inference harness |
-| `USE_FBGEMM` | `0` | Quantisation backend not required |
-| `USE_NNPACK` | `0` | Not required |
-| `USE_QNNPACK` | `0` | Not required |
-| `USE_XNNPACK` | `0` | Not required |
-| `USE_FLASH_ATTENTION` | `0` | CUDA-only feature |
-| `USE_MEM_EFF_ATTENTION` | `0` | CUDA-only feature |
+| `EXAMPLE_FLAG` | `1` | What breaks or slows down if it is left at its default |
+
+Favor flags that disable out-of-scope features (GPU, distributed, optional backends) to cut
+build time and shrink the surface the harness has to stub.
 
 **Constraint:** Do not perform any GIT commits. These will be handled externally.
 
-**Constraint:** Use codecarbon for energy measurement in integration tests (`pip install codecarbon`; wrap benchmark runs with `EmissionsTracker`).
+**Constraint (energy measurement):** Name the energy or emissions measurement tool the
+integration tests must use and how to wire it in, so every benchmark run is instrumented the
+same way. This is the project's core signal; do not leave it implicit.
 
-**Constraint (harness venv must be able to collect PyTorch's own test suite):**
-`integration-test/requirements.txt` must include `expecttest` and `hypothesis`. The
-Phase 7 correctness gates run PyTorch's own tests (`src/test/...`, and
-`test/test_ops.py` for the OpInfo gate) with the harness venv interpreter, and
-`torch.testing._internal.common_utils` unconditionally does `import expecttest`
-(several suites also use `hypothesis`). These packages are listed in PyTorch's
-`src/requirements.txt` under "Install / Development extra requirements" — they are
-NOT in `requirements-build.txt`, so a build-requirements-only install leaves the venv
-unable to even collect the test suite, and every optimization cycle fails its gates
-with `ModuleNotFoundError: expecttest` regardless of the change under test (observed:
-14 of 15 iteration failures in one run).
+**Constraint (test dependencies):** If the correctness gates run the target's own test
+suite, list every package that suite needs to even be collected, not just to pass. Test
+harnesses frequently import helper libraries at module load time, so a
+build-requirements-only install can leave the venv unable to collect the suite at all, which
+fails every optimization cycle regardless of the change under test.
 
-**Constraint (conftest must stub the uncompiled distributed modules):** because the
-build uses `USE_DISTRIBUTED=0`, `transformers.integrations.fsdp.is_fsdp_managed_module()`
-(called during `model.generate()`) triggers `import torch.distributed.fsdp` →
-`torch.testing._internal.distributed.fake_pg` → `torch._C._distributed_c10d`, which is
-not compiled — an `ImportError` at inference time. The harness `tests/conftest.py` MUST
-insert `sys.modules` stubs **before anything imports torch**: (1) a stub module for
-`torch._C._distributed_c10d` exposing no-op `FakeProcessGroup` and `FakeStore` classes;
-(2) a stub module for `torch.distributed.fsdp` exposing a no-op
-`FullyShardedDataParallel` class; then, after `import torch.distributed`, bind the fsdp
-stub as an attribute of `torch.distributed`. Do NOT replace the whole
-`torch.distributed` module — partial replacement breaks other attribute access (e.g.
-`torch.distributed.Backend`). This fix has been rediscovered by repair loops in two
-separate runs; generate it up front.
+**Constraint (harness shims for disabled features):** If your build configuration disables a
+feature that the target still imports at runtime, describe the shim the harness must install
+before anything imports the target, and describe it precisely enough to generate up front.
+Partial stubs are usually safer than replacing a whole module, because downstream code often
+reaches for unrelated attributes on the same module. This kind of fix tends to be
+rediscovered by repair loops, so writing it here once saves cycles.
 
-**Constraint (transformers version):** pin `transformers` to a release verified to
-import and run `generate()` against this CPU-only, `USE_DISTRIBUTED=0` source build
-with the conftest stubs above. `transformers==4.47.1` is verified (archived
-`codeweave-run` branch); prefer it over nearby releases unless the chosen version has
-been re-verified against the build.
+**Constraint (dependency version pins):** Pin any surrounding dependency (framework, model
+runner, data library) to a release verified to import and run against your build
+configuration, and record where that verification happened. Prefer a version you have
+confirmed over a newer one you have not.
