@@ -245,10 +245,10 @@ CodeWeave is **experimental**. It is a working, end-to-end pipeline that has bee
 
 - **Documentation:** per-phase reference in [`docs/index.md`](docs/index.md); the design rationale in [`executive-summary.md`](executive-summary.md).
 - **Examples:** prompt and constraint files under [`work/`](work) and [`constraints/`](constraints); a sample run's artifacts appear in `proof/` (auto-created). `[ADD LINK TO A PUBLISHED EXAMPLE RUN]`
-- **Roadmap:** `[ADD ROADMAP LINK]` — near-term focus is verifying portability to a second target via the manifest seam.
-- **Contributing:** `[ADD CONTRIBUTING.md]` — issues and PRs welcome; please include the relevant `proof/` artifacts when reporting pipeline behavior.
-- **Support:** `[ADD SUPPORT CHANNEL — GitHub Issues / Discussions]`
-- **Security:** the pipeline handles two PATs and pushes branches to a target repo; scope tokens minimally as described in [Prerequisites](#quickstart). `[ADD SECURITY.md / disclosure policy]`
+- **Roadmap:** [`ROADMAP.md`](ROADMAP.md) — near-term focus is publishing a real run and verifying portability to a second target via the manifest seam.
+- **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md) — issues and PRs welcome; please include the relevant `proof/` artifacts when reporting pipeline behavior.
+- **Support:** open a [GitHub issue](../../issues). `[ADD DISCUSSIONS LINK IF ENABLED]`
+- **Security:** the pipeline handles two PATs and pushes branches to a target repo; scope tokens minimally as described in [Prerequisites](#quickstart). Report vulnerabilities via [`SECURITY.md`](SECURITY.md).
 
 ## License
 
