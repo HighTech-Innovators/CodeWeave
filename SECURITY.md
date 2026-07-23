@@ -22,7 +22,7 @@ When reporting, please include:
 - The affected component (a workflow, a `work/` prompt, `ab_compare.py`, etc.).
 - Any suggested remediation.
 
-**Please redact secrets** from anything you attach — never include the values of
+**Please redact secrets** from anything you attach, and never include the values of
 `COPILOT_TOKEN`, `PUSH_TOKEN`, or any other credential.
 
 ### What to expect
@@ -43,7 +43,7 @@ secrets and scoped as narrowly as possible:
 
 | Secret | Scope it needs | Used by |
 |--------|----------------|---------|
-| `COPILOT_TOKEN` | **Copilot user requests: Read** (account permission only — no repository permissions) | Every Copilot phase, as `GH_TOKEN` |
+| `COPILOT_TOKEN` | **Copilot user requests: Read** (account permission only, no repository permissions) | Every Copilot phase, as `GH_TOKEN` |
 | `PUSH_TOKEN` | **Contents: Read and write** on the *target* repository only | Phase 2 (push ADRs) and Phase 7 (push optimization branches) |
 
 Guidance:
@@ -65,6 +65,6 @@ Guidance:
 
 This policy covers the CodeWeave pipeline in this repository (workflows, composite
 action, prompts, and tooling under `integration-test/_tools/`). Vulnerabilities in
-the *target* repositories CodeWeave analyzes, or in third-party dependencies (the
-GitHub Copilot CLI, PyTorch, CodeCarbon, etc.), should be reported to their
-respective maintainers.
+the *target* repositories CodeWeave analyzes, or in third-party dependencies such as
+the GitHub Copilot CLI or CodeCarbon, should be reported to their respective
+maintainers.
