@@ -228,6 +228,7 @@ This is a positioning of *discipline*, not a knock on coding agents — CodeWeav
 CodeWeave is **experimental**. It is a working, end-to-end pipeline that has been built and iterated against a real target (PyTorch, CPU), but it has not been hardened for arbitrary repositories or published with reproducible headline results.
 
 - **Working today:** the full eight-phase run against the reference target — generate→validate documentation loops, source build, statistical baseline, correctness-gated optimization cycles with paired A/B verdicts, and the aggregate report with PR drafts.
+- **Tested:** the verdict engine (`integration-test/_tools/ab_compare.py`) — the code that decides every KEEP / INVESTIGATE / REVERT — is covered by a unit + integration suite (decision table, noise-floor gate, Holm–Bonferroni correction, and all three CLI modes). CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs it on every push and PR and lints the pipeline's workflow YAML and shell scripts.
 - **Experimental:** portability beyond the PyTorch/CPU reference target. The manifest seam is designed for it, but other toolchains are unverified. `[VERIFY portability on a second target]`
 - **Planned / manual by design:** opening PRs (Phase 8 drafts them); acting on `INVESTIGATE` results (surfaced, never auto-investigated).
 - **Known limitations:**
