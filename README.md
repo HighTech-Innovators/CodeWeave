@@ -65,6 +65,8 @@ CodeWeave is built on a single conviction: the agent that writes a change must n
 
 The long-term aim is greener software produced without a human babysitting every experiment. Energy and carbon are measured directly and treated as the ultimate objective, while per-iteration latency serves as the lever precise enough to resolve at the scale of one change. What emerges is an autonomous loop that can walk into an unfamiliar codebase, understand it, improve it under measurement, and leave behind an audit trail a reviewer can actually check.
 
+A second goal follows from the way that loop is built. To optimize a system safely, CodeWeave has to understand it first, and the understanding it produces does not evaporate once the run ends. The architecture book, the per-area Architecture Decision Records committed next to the code they describe, and the grounded measurement harness are durable artifacts that outlive the optimization campaign. Software that had drifted into being effectively unmaintainable, opaque to the people who own it and risky to touch, comes back documented, mapped, and safe to change again. In this sense CodeWeave fights technical debt as it works: the same context it builds to find energy wins is also the context a team needs to maintain the system for years afterward.
+
 ---
 
 ## What CodeWeave takes seriously
@@ -85,7 +87,7 @@ CodeWeave is aimed at the people responsible for large, compute-heavy systems wh
 
 The most direct use is to find and prove efficiency wins in a hot codebase. You run the full pipeline and receive a ranked set of pull-request-ready branches, each carrying a statistical verdict and a per-iteration energy and carbon figure, together with honest REVERT and INVESTIGATE records for the ideas that did not pan out.
 
-A second use is simply to understand a codebase you have inherited. The first four phases on their own produce an architecture book with a PDF, per-area Architecture Decision Records committed alongside the code they describe, and a runnable measurement harness, all grounded in the actual source rather than in generic assumptions about it.
+A second use is to recover a codebase that has become hard to maintain. The first four phases on their own produce an architecture book with a PDF, per-area Architecture Decision Records committed alongside the code they describe, and a runnable measurement harness, all grounded in the actual source rather than in generic assumptions about it. For software that had drifted into being effectively unmaintainable, this is a direct way to pay down technical debt: the system comes back documented, mapped, and safe to change, whether or not you go on to run the optimization phases.
 
 A third use is to vet an agent's optimization before you trust it. The correctness gate combined with drift-controlled A/B measurement is exactly the review you would otherwise perform by hand for every candidate, except that it runs automatically and records its reasoning.
 
