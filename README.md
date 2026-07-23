@@ -1,5 +1,11 @@
 # CodeWeave
 
+[![Quickstart](https://img.shields.io/badge/QUICKSTART-2ea44f?style=for-the-badge)](#quickstart)
+[![Results](https://img.shields.io/badge/RESULTS-e5442e?style=for-the-badge)](executive-summary.md)
+[![Methodology](https://img.shields.io/badge/METHODOLOGY-1f8fff?style=for-the-badge)](#how-it-works)
+[![Contribute](https://img.shields.io/badge/CONTRIBUTE-a463f2?style=for-the-badge)](CONTRIBUTING.md)
+[![Discuss](https://img.shields.io/badge/DISCUSS-333333?style=for-the-badge)](../../issues)
+
 **An autonomous pipeline that hunts energy and CO₂ hotspots in a codebase and ships the efficiency fixes it can prove real.** It works against a codebase of any language or stack, reading the target's toolchain from a manifest rather than assuming one. Every candidate change is measured for energy and carbon, cleared by a correctness gate, and accepted only when a statistical test says the improvement is genuine. The result is greener code that you do not have to take an agent's word for.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
