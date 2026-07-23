@@ -358,7 +358,7 @@ def compare(mod, golden_path: Path, report_path: Path | None, spec_hash: str):
     }
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
     n_fail = sum(1 for r in results if not r["passed"])

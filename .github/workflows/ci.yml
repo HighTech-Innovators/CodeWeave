@@ -1,0 +1,54 @@
+name: CI
+
+# Repo self-validation, distinct from the CodeWeave pipeline (codeweave.yml).
+# Runs on hosted runners and does NOT touch the target repo, secrets, or Copilot.
+# It exercises the deterministic tooling that decides every verdict, and lints the
+# pipeline's own workflow YAML and shell scripts.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tools-tests:
+    name: Verdict-engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Run tooling tests
+        run: python -m pytest tests -q
+
+  lint-workflows:
+    name: Lint workflows & shell
+    runs-on: ubuntu-latest
+    # The pipeline's workflow shell is authored (and partly Copilot-generated) and
+    # already runs in production. We gate on genuine defects (shellcheck severity
+    # >= warning: unused vars, quoting bugs that change behavior, etc.), not on
+    # info/style advisories (SC2086 word-splitting hints, SC2129 redirect grouping,
+    # ...), which would be high-churn/low-value to rewrite blindly here. Raise the
+    # bar in a dedicated shell-hardening pass, not a docs PR.
+    env:
+      SHELLCHECK_OPTS: --severity=warning
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint (GitHub Actions workflow linter, incl. embedded shellcheck)
+        uses: raven-actions/actionlint@v2
+        with:
+          fail-on-error: true
+      - name: shellcheck (standalone .sh scripts)
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          severity: warning

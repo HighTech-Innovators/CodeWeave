@@ -1,0 +1,17 @@
+# Normalize line endings. The pipeline runs on Linux; shell scripts MUST stay LF
+# or they break on the runner. Keep repo text LF-normalized regardless of the OS
+# a contributor commits from (silences the CRLF warnings on Windows checkouts).
+* text=auto eol=lf
+
+# Explicitly LF for executable/interpreted files that are line-ending sensitive.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.js   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+
+# Treat these as binary (no EOL munging, no diffs).
+*.pdf  binary
+*.png  binary
+*.jpg  binary

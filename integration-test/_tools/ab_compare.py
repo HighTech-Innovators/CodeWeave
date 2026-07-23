@@ -76,7 +76,7 @@ def load_v2_records(path: Path, label: str):
     wall_clock_ms. Exits with a clear error if any record is stale-format:
     mixing schemas silently is exactly the contamination v2 exists to prevent.
     """
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         records = json.load(f)
 
     if not records:
@@ -145,10 +145,10 @@ def baseline_mode(runs_path: Path, output_dir: Path):
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / "baseline.json", "w") as f:
+    with open(output_dir / "baseline.json", "w", encoding="utf-8") as f:
         json.dump(baseline_result, f, indent=2)
 
-    with open(output_dir / "baseline-summary.md", "w") as f:
+    with open(output_dir / "baseline-summary.md", "w", encoding="utf-8") as f:
         f.write("# Baseline Statistics (v2 — per-iteration metrics)\n\n")
         f.write("| Metric | Value |\n")
         f.write("|--------|-------|\n")
@@ -163,7 +163,7 @@ def baseline_mode(runs_path: Path, output_dir: Path):
         f.write(f"| Wall clock, mean (ms) — informational | {wall_stats['mean']:.0f} |\n")
         f.write(f"| Mean CO₂ (g) | {mean_co2:.6f} |\n")
 
-    with open(output_dir / "baseline-complete.md", "w") as f:
+    with open(output_dir / "baseline-complete.md", "w", encoding="utf-8") as f:
         f.write("# Baseline Complete\n\n")
         f.write(f"Baseline measurement completed with {iter_stats['n']} runs "
                 f"(v2 per-iteration metrics).\n\n")
@@ -186,7 +186,7 @@ def baseline_mode(runs_path: Path, output_dir: Path):
 
 def load_micro(path: Path):
     """Load an op_microbench.py output file: median_ns + raw_times_ns."""
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if "median_ns" not in data:
         print(f"Error: {path} is not a valid microbench file (no median_ns)",
@@ -312,7 +312,7 @@ def drift_check(phase6_baseline_path: Path, current_a_iter_stats):
     Drift does not change the verdict (the paired design protects it) but is
     flagged for the Phase 8 report.
     """
-    with open(phase6_baseline_path, "r") as f:
+    with open(phase6_baseline_path, "r", encoding="utf-8") as f:
         ref = json.load(f)
 
     if "median_iter_ms_mean" not in ref or "cv_iter" not in ref:
@@ -434,10 +434,10 @@ def compare_mode(baseline_path: Path, variant_path: Path, output_prefix: Path,
     }
 
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_prefix.with_suffix(".json"), "w") as f:
+    with open(output_prefix.with_suffix(".json"), "w", encoding="utf-8") as f:
         json.dump(comparison_result, f, indent=2)
 
-    with open(output_prefix.with_suffix(".md"), "w") as f:
+    with open(output_prefix.with_suffix(".md"), "w", encoding="utf-8") as f:
         f.write("# A/B Comparison Results (v2)\n\n")
         f.write(f"## Decision: **{decision}** (signal: `{decision_signal}`)\n\n")
         f.write(f"Measurement path: `{measurement_path}`\n\n")
@@ -533,7 +533,7 @@ def family_mode(reports_dir: Path, output_dir: Path, alpha=0.05):
     rows = []
     for fp in sorted(reports_dir.glob("ab-comparison-opt*.json")):
         try:
-            with open(fp) as fh:
+            with open(fp, encoding="utf-8") as fh:
                 d = json.load(fh)
         except (OSError, json.JSONDecodeError):
             continue
@@ -573,10 +573,10 @@ def family_mode(reports_dir: Path, output_dir: Path, alpha=0.05):
               "family_size": m, "n_demoted": len(demoted), "cycles": rows}
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / "family-correction.json", "w") as f:
+    with open(output_dir / "family-correction.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
-    with open(output_dir / "family-correction.md", "w") as f:
+    with open(output_dir / "family-correction.md", "w", encoding="utf-8") as f:
         f.write("# Family-Wise Correction (Holm-Bonferroni, FWER = "
                 f"{alpha})\n\n")
         f.write(f"Family of {m} measured comparison(s); each cycle's primary-path "

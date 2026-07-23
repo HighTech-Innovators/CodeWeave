@@ -249,7 +249,6 @@ jobs:
       - name: Generate navigation indexes
         id: build-indexes
         run: |
-          BOOK_INDEX_BUILT=0
           ADR_INDEX_BUILT=0
 
           node .github/scripts/generate-indexes.js --generate-adr-index 2>&1 | tee "proof/adr-index.md" || true
@@ -263,7 +262,6 @@ jobs:
             git add book/BOOK-INDEX.md
             if ! git diff --cached --quiet; then
               git commit -m "Phase 2: update BOOK-INDEX.md"
-              BOOK_INDEX_BUILT=1
             fi
           fi
 
