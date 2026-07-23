@@ -145,7 +145,6 @@ jobs:
             # Copilot AUTHORS integration-test/build-source.sh (read/write/edit only —
             # no shell needed); the workflow EXECUTES it directly so build output
             # streams into the job log and no tool permissions can block the build.
-            VENV_PY="$PWD/integration-test/${HARNESS_VENV_PYTHON:-.venv/bin/python}"
             BUILD_OK=false
             for ATTEMPT in $(seq 1 "${PHASE5_MAX_ITERATIONS}"); do
               if [ -f integration-test/build-error.md ]; then MODE=repair; else MODE=author; fi
