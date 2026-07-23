@@ -1,0 +1,46 @@
+name: CI
+
+# Repo self-validation, distinct from the CodeWeave pipeline (codeweave.yml).
+# Runs on hosted runners and does NOT touch the target repo, secrets, or Copilot.
+# It exercises the deterministic tooling that decides every verdict, and lints the
+# pipeline's own workflow YAML and shell scripts.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tools-tests:
+    name: Verdict-engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Run tooling tests
+        run: python -m pytest tests -q
+
+  lint-workflows:
+    name: Lint workflows & shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint (GitHub Actions workflow linter)
+        uses: raven-actions/actionlint@v2
+        with:
+          fail-on-error: true
+      - name: shellcheck (shell script linter)
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          severity: warning
