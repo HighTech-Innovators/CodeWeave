@@ -33,7 +33,7 @@ jobs:
       pdf_generated:       ${{ steps.build-pdf.outputs.pdf_generated }}
       book_index_built:    ${{ steps.build-book-index.outputs.book_index_built }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true

@@ -108,7 +108,7 @@ jobs:
     needs: [phase-1, phase-2, phase-3, phase-4, phase-5-6]
     if: always() && !cancelled()
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true

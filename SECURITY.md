@@ -13,7 +13,9 @@ Preferred channel: use GitHub's **private vulnerability reporting** on this
 repository (the *Security* tab → *Report a vulnerability*). This keeps the report
 confidential until a fix is available.
 
-Alternatively, email `[ADD SECURITY CONTACT EMAIL]`.
+If private vulnerability reporting is unavailable, open an issue that contains no
+sensitive details and ask the maintainers for a private channel. Do not include a
+proof of concept or credentials in a public issue.
 
 When reporting, please include:
 
@@ -27,14 +29,14 @@ When reporting, please include:
 
 ### What to expect
 
-- **Acknowledgement:** `[CONFIRM RESPONSE-TIME SLA]` (suggested: within 5 business days).
-- We will confirm the issue, assess severity, and keep you updated on remediation.
+- **Acknowledgement:** We will confirm the issue, assess severity, and keep you
+  updated on remediation as practical.
 - Please give us a reasonable window to release a fix before public disclosure.
 
 ## Supported versions
 
-CodeWeave is **experimental** and pre-release. Security fixes are applied to the
-default branch (`main`) only. `[CONFIRM SUPPORTED-VERSION POLICY IF RELEASES BEGIN]`
+CodeWeave is **experimental** and pre-release. The default branch (`main`) is the
+only supported line until versioned releases are published.
 
 ## Credential handling (how the pipeline treats secrets)
 

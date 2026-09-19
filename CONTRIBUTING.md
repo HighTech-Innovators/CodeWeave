@@ -68,9 +68,11 @@ Changes to the verdict logic in `ab_compare.py` or to the correctness gate shoul
 explain how they affect the trustworthiness of a verdict, in terms of significance,
 the noise floor, drift control, or the family-wise correction.
 
-## Code of conduct
+## Community standards
 
-Be respectful and constructive. `[ADD CODE_OF_CONDUCT.md IF ADOPTING ONE]`
+Be respectful, constructive, and precise. Keep discussions focused on the
+technical work, assume good intent, and make room for different perspectives.
+If the project adopts a formal code of conduct, it will be linked here.
 
 ## License
 

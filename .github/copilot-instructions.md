@@ -237,7 +237,7 @@ If modifying tool permissions, update the corresponding `--allow-tool` flags in 
 
 ## Dependencies & Prerequisites
 
-- **Node.js 22** — Required for Copilot CLI installation (auto-installed via `actions/setup-node@v4`)
+- **Node.js 22** — Required for Copilot CLI installation (auto-installed via `actions/setup-node@v7`)
 - **Bash** — Required to source `.github/codeweave.config`
 - **Git** — Cloning, commits, and pushing (pre-installed on runners)
 - **Self-Hosted Runner** — Configured as `runs-on: [self-hosted, Linux, X64]`
