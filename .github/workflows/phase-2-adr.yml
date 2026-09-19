@@ -33,7 +33,7 @@ jobs:
       adr_pdf_built:   ${{ steps.build-adr-pdf.outputs.adr_pdf_built }}
       adr_index_built: ${{ steps.build-indexes.outputs.adr_index_built }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true

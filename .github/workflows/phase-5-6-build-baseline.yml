@@ -33,7 +33,7 @@ jobs:
       source_build_complete: ${{ steps.build_source.outputs.source_build_complete }}
       baseline_complete: ${{ steps.execute.outputs.baseline_complete }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true

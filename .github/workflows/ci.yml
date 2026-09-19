@@ -19,8 +19,8 @@ jobs:
     name: Verdict-engine tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dev dependencies
@@ -42,13 +42,13 @@ jobs:
     env:
       SHELLCHECK_OPTS: --severity=warning
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: actionlint (GitHub Actions workflow linter, incl. embedded shellcheck)
-        uses: raven-actions/actionlint@v2
+        uses: raven-actions/actionlint@v2.2.0
         with:
           fail-on-error: true
       - name: shellcheck (standalone .sh scripts)
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@2.0.0
         with:
           scandir: "."
           severity: warning

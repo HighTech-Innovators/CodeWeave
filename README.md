@@ -15,11 +15,9 @@
 
 > _CodeWeave exists to make software cost less energy. It drives the GitHub Copilot CLI across an eight-phase pipeline: it clones a target repository, documents it from the ground up, builds an energy- and latency-aware measurement harness, profiles the target for the paths that burn the most, and then runs autonomous optimization cycles. It measures energy and carbon (via CodeCarbon) on every change, and it accepts or rejects each change by experiment rather than by the judgement of the agent that wrote it._
 
-<!-- VISUAL PLACEHOLDER:
-     Recommended hero asset: a terminal recording, or the Phase 8 report table, showing one
-     optimization cycle running from correctness gate to paired A/B measurement to a verdict,
-     with the per-iteration energy and carbon figures alongside.
-     [ADD DEMO GIF] [ADD LINK TO A REAL proof/ RUN] -->
+> **Current status.** The repository documents the complete pipeline and its
+> deterministic verdict tooling. A public end-to-end proof run is not published
+> yet; generated proof artifacts are retained by workflow runs for review.
 
 ### What it does
 
@@ -235,7 +233,7 @@ What remains experimental is portability across a wide range of targets. The man
 
 Some behavior is manual by design. Phase 8 drafts pull requests but does not open them, and INVESTIGATE results are surfaced rather than acted on.
 
-Several limitations are worth stating plainly. The pipeline requires a self-hosted, persistent runner, because the later phases reuse the build and the build environment in place and there is no ephemeral-runner path. It requires GitHub Copilot CLI access and two fine-grained tokens. Energy and carbon are measured and reported but do not gate individual verdicts, because their per-change resolution is too coarse. The model and CI cost scales with the iteration caps and the number of optimizations. And there are no published benchmark results yet. `[ADD BENCHMARK: headline energy and latency results from a real run]`
+Several limitations are worth stating plainly. The pipeline requires a self-hosted, persistent runner, because the later phases reuse the build and the build environment in place and there is no ephemeral-runner path. It requires GitHub Copilot CLI access and two fine-grained tokens. Energy and carbon are measured and reported but do not gate individual verdicts, because their per-change resolution is too coarse. The model and CI cost scales with the iteration caps and the number of optimizations. There are no published benchmark results yet; the first public run should include both the measurements and the surrounding proof artifacts.
 
 > **Maturity note.** Treat CodeWeave as a research-grade automation harness. Review every drafted pull request and read the `proof/` trail before shipping anything it produces.
 
@@ -243,9 +241,9 @@ Several limitations are worth stating plainly. The pipeline requires a self-host
 
 ## Documentation, community, and trust
 
-The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt files live under [`work/`](work), the language-neutral constraint templates you fill in for your target live under [`constraints/`](constraints), and a sample run's artifacts appear in `proof/`, which is created automatically. `[ADD LINK TO A PUBLISHED EXAMPLE RUN]`
+The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt files live under [`work/`](work), the language-neutral constraint templates you fill in for your target live under [`constraints/`](constraints), and a run's proof artifacts appear in `proof/`, which is created automatically.
 
-The near-term direction is set out in [`ROADMAP.md`](ROADMAP.md), whose current focus is publishing a real run and verifying portability across additional targets through the manifest seam. Contributions are welcome; please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, and include the relevant `proof/` artifacts when you report pipeline behavior. For support, open a [GitHub issue](../../issues). `[ADD DISCUSSIONS LINK IF ENABLED]` Because the pipeline handles two access tokens and pushes branches to a target repository, please scope the tokens minimally as described under [Prerequisites](#quickstart) and report any vulnerability through [`SECURITY.md`](SECURITY.md).
+The near-term direction is set out in [`ROADMAP.md`](ROADMAP.md), whose current focus is publishing a real run and verifying portability across additional targets through the manifest seam. Contributions are welcome; please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, and include the relevant `proof/` artifacts when you report pipeline behavior. For support, open a [GitHub issue](../../issues). Because the pipeline handles two access tokens and pushes branches to a target repository, please scope the tokens minimally as described under [Prerequisites](#quickstart) and report any vulnerability through [`SECURITY.md`](SECURITY.md).
 
 ## License
 
