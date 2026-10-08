@@ -29,6 +29,23 @@ document what a new target requires. A related goal is to reduce the runner
 assumptions, exploring paths that do not require a single persistent self-hosted
 runner to carry state across the measurement phases.
 
+Security is the other addition at this stage. Today a candidate change must build,
+pass the target's tests, and win the paired measurement, but nothing checks that it
+preserves the target's security requirements. The aim is to let a target declare
+those requirements alongside its other constraints in `constraints/project.md`, and
+to have the correctness gate reject any optimization that violates them, so that a
+faster change can never ship at the cost of a weaker one.
+
+## Exploring: wider scope for the same evidence
+
+Two ideas are under consideration but not yet committed. The first is a structured
+way to record the goal and intent behind a run, meaning what is being optimized,
+which trade-offs are acceptable, and what outcome would count as success, extending
+the constraint templates so that the agent and the reviewer work from the same
+stated objective. The second is applying the energy-first lens to the delivery
+pipeline itself, identifying unnecessary runners, redundant workflows, and wasteful
+maintenance jobs, since a codebase's CI footprint is part of its energy cost.
+
 ## Later: sharper science and less manual glue
 
 Several improvements would deepen the system once the core is proven. An INVESTIGATE
