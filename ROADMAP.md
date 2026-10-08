@@ -46,6 +46,15 @@ stated objective. The second is applying the energy-first lens to the delivery
 pipeline itself, identifying unnecessary runners, redundant workflows, and wasteful
 maintenance jobs, since a codebase's CI footprint is part of its energy cost.
 
+A third idea applies the same lens to the pipeline's own model use. Many of the
+agent's steps are closed choices, such as which candidate to try next or how to
+triage a failure, yet each is answered by generating text with a large hosted model.
+[OpenJev](https://openjev.com/) (now SemIf) shows that a small local model can make
+such a decision by reading the probabilities of the allowed options directly, without
+decoding any tokens. Routing these closed decisions through an OpenJev-style readout
+could cut the pipeline's own compute and energy, and CodeWeave's paired A/B
+measurement is well suited to verifying whether the decisions stay as good.
+
 ## Later: sharper science and less manual glue
 
 Several improvements would deepen the system once the core is proven. An INVESTIGATE
