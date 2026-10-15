@@ -3,5 +3,5 @@
 # (the statistics/verdict engine), NOT the target harness dependencies, which are
 # installed per-target from SOURCE-UNDER-INVESTIGATION.md during a pipeline run.
 pytest>=9.1.1,<10
-numpy>=2.5.3,<3
+numpy>=2.5.4,<3
 scipy>=1.18.1,<2
