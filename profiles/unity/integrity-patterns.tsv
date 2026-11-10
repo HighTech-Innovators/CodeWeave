@@ -1,0 +1,38 @@
+# What an optimization agent may not touch (protected, always restored), what it may
+# touch but caps a KEEP at INVESTIGATE (tuning), and added source lines that hint the
+# change affects measuring rather than the game (sensitive, regular expressions).
+# Format: kind<TAB>pattern. Paths are relative to the target root; `*` crosses folders.
+protected	ProjectSettings/*
+protected	Packages/*
+protected	*/Tests/*
+protected	*Tests/*
+protected	tools/*
+protected	docs/*
+protected	*/Editor/*
+protected	*AutoTest*
+protected	*LaunchOptions*
+protected	*SelfTest*
+protected	*Selftest*
+protected	Assets/Settings/*.asset
+protected	*.unity
+protected	*.prefab
+protected	*.asmdef
+protected	codeweave-results/*
+tuning	Assets/*/Data/*.json
+tuning	Assets/*/Data/*.asset
+tuning	*.mat
+tuning	*.shader
+tuning	*.hlsl
+tuning	*.compute
+sensitive	isBatchMode
+sensitive	vSyncCount
+sensitive	targetFrameRate
+sensitive	QualitySettings
+sensitive	renderScale
+sensitive	shadowDistance
+sensitive	GetEnvironmentVariable
+sensitive	GetCommandLineArgs
+sensitive	Application\.isEditor
+sensitive	Automated|AutoTest|SelfTest|Selftest
+sensitive	FrameTimingManager
+sensitive	Time\.(unscaled)?deltaTime\s*=

@@ -98,10 +98,11 @@ The pipeline runs two ways:
   `gh workflow run`. When Phase 6 produces a baseline, `codeweave.yml`'s
   `trigger-phase-7` job dispatches the first Phase 7 cycle automatically, so a single
   dispatch of `codeweave.yml` runs all eight phases end-to-end.
-- **Local runner for Phases 1–2** — `run-local.sh` runs the book and ADR phases
-  against a repository on disk (no GitHub needed), through the same step scripts the
-  Phase 1–2 workflows call (`.github/scripts/phase-{1,2}.sh`). See
-  [Local runs](local-runs.md).
+- **Local runner** — `run-local.sh` runs the pipeline against a repository on disk (no
+  GitHub needed). Phases 1–2 use the same step scripts as the workflows
+  (`.github/scripts/phase-{1,2}.sh`); Phases 3–8 run locally only, through the
+  [harness contract](harness-contract.md) and trusted measurement tools, with project-type
+  prompts per profile (Unity so far). See [Local runs](local-runs.md).
 
 All target-side output goes to one folder in the target, `codeweave-results/`; see
 [Phase 2](phase-2-adr-generation.md).
