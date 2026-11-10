@@ -68,7 +68,7 @@ Read `integration-test/SOURCE-UNDER-INVESTIGATION.md`.
 FAIL if: the file does not specify a fixed source path for the target.
 FAIL if: the build and setup requirements do not reflect the constraints in `constraints/project.md` (e.g. if constraints/project.md specifies CPU-only, the setup must exclude GPU backends).
 FAIL if: the scope section does not explicitly list what is excluded, derived from `constraints/project.md`.
-FAIL if: the observability focus section contains no references to actual ADR paths from `src/ADR-INDEX.md` — each focus area must name at least one specific ADR path or book chapter.
+FAIL if: the observability focus section contains no references to actual ADR paths from `src/codeweave-results/ADR-INDEX.md` — each focus area must name at least one specific ADR path or book chapter.
 FAIL if: no representative integration scenario is defined — it must name: test file path, inputs or model, expected runtime duration, observable outputs.
 FAIL if: the flamegraph section does not name specific expected artifact paths.
 FAIL if: the observability focus section does not cover all three concern categories (underutilisation, waiting patterns, bottlenecks) — each category must have at least one labelled focus area with a supporting ADR path or book chapter.
@@ -141,7 +141,7 @@ Date: <YYYY-MM-DD>
 
 <If FAIL: list every specific action the generation pass must take next. Be precise and actionable:
   - "AGENTS.md is missing a Canonical Trace Model section — add required fields (trace_id, span_id, parent_id, timestamps, attributes, events)"
-  - "SOURCE-UNDER-INVESTIGATION.md observability focus section names no ADR paths — each focus area must reference a specific path from src/ADR-INDEX.md"
+  - "SOURCE-UNDER-INVESTIGATION.md observability focus section names no ADR paths — each focus area must reference a specific path from src/codeweave-results/ADR-INDEX.md"
   - "WORK.md checklist has no flamegraph concern group — add specific checklist items for profiling data capture and flamegraph generation"
   - "SOURCE-UNDER-INVESTIGATION.md scope section does not reflect the CPU-only constraint from constraints/project.md — explicitly exclude GPU/device backends with reason"
   - "AGENTS.md reads as a generic template — instrumentation strategy must reference specific tooling from the target codebase (e.g. torch.profiler, RecordFunction) rather than abstract descriptions"

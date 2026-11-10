@@ -5,7 +5,8 @@ specification that defines what to measure, how to build/run it, and the
 representative integration scenario. No runnable test code yet — that is Phase 4.
 
 - **Workflow:** `.github/workflows/phase-3-harness.yml` (called by `codeweave.yml`)
-- **Gate to enter:** Phase 2 produced `src/ADR-INDEX.md`.
+- **Local:** `./run-local.sh run <name> --phase 3` (see [Local runs](local-runs.md))
+- **Gate to enter:** Phase 2 produced `src/codeweave-results/ADR-INDEX.md`.
 
 ## Inputs
 

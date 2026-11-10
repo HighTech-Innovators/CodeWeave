@@ -46,14 +46,15 @@ jobs:
 
       - name: Check Phase 3 prerequisites
         run: |
-          if [ "${DRY_RUN}" = "true" ] && [ ! -f "src/ADR-INDEX.md" ]; then
-            echo "DRY RUN: creating stub src/ADR-INDEX.md to satisfy prerequisite"
-            echo "# ADR Index (dry-run stub)" > src/ADR-INDEX.md
-          elif [ ! -f "src/ADR-INDEX.md" ]; then
-            echo "ERROR: src/ADR-INDEX.md not found — Phase 2 must complete successfully before Phase 3"
+          if [ "${DRY_RUN}" = "true" ] && [ ! -f "src/codeweave-results/ADR-INDEX.md" ]; then
+            echo "DRY RUN: creating stub src/codeweave-results/ADR-INDEX.md to satisfy prerequisite"
+            mkdir -p src/codeweave-results
+            echo "# ADR Index (dry-run stub)" > src/codeweave-results/ADR-INDEX.md
+          elif [ ! -f "src/codeweave-results/ADR-INDEX.md" ]; then
+            echo "ERROR: src/codeweave-results/ADR-INDEX.md not found — Phase 2 must complete successfully before Phase 3"
             exit 1
           fi
-          echo "Prerequisites satisfied: src/ADR-INDEX.md found"
+          echo "Prerequisites satisfied: src/codeweave-results/ADR-INDEX.md found"
 
       - name: Phase 3 iterations
         id: iterations
@@ -78,7 +79,7 @@ jobs:
             echo "$last"
           }
 
-          STRATEGY_PROMPT="Work on the task described in work/3-generate-harness.md and constraints/project.md. Read constraints/harness.md for performance measurement constraints. Analyse ./src using ./book and ./integration-test as reference. The ADR navigation index is at src/ADR-INDEX.md and the book navigation index is at book/BOOK-INDEX.md."
+          STRATEGY_PROMPT="Work on the task described in work/3-generate-harness.md and constraints/project.md. Read constraints/harness.md for performance measurement constraints. Analyse ./src using ./book and ./integration-test as reference. The ADR navigation index is at src/codeweave-results/ADR-INDEX.md and the book navigation index is at book/BOOK-INDEX.md."
           STRATEGY_VALIDATE_PROMPT="Validate the test strategy as described in work/3-validate-harness.md and constraints/project.md. Read constraints/harness.md for performance measurement constraints. Do not write or modify integration-test/AGENTS.md, integration-test/SOURCE-UNDER-INVESTIGATION.md, or integration-test/WORK.md."
 
           STRATEGY_COMPLETE=0

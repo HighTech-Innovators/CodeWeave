@@ -14,8 +14,8 @@ phases), what it does, and what it produces.
 | # | Phase | Gate to enter | Completion artifact |
 |---|-------|---------------|---------------------|
 | 1 | [Book generation](phase-1-book-generation.md) | — (always runs) | `book/manuscript-complete.md` |
-| 2 | [ADR generation](phase-2-adr-generation.md) | `book.pdf` exists | `src/adrs-complete.md` |
-| 3 | [Harness design](phase-3-harness-design.md) | `src/ADR-INDEX.md` exists | `integration-test/harness-complete.md` |
+| 2 | [ADR generation](phase-2-adr-generation.md) | `book.pdf` exists | `src/codeweave-results/adrs-complete.md` |
+| 3 | [Harness design](phase-3-harness-design.md) | `src/codeweave-results/ADR-INDEX.md` exists | `integration-test/harness-complete.md` |
 | 4 | [Integration test generation](phase-4-test-generation.md) | `integration-test/harness-complete.md` | `integration-test/tests-complete.md` |
 | 5 | [Source build](phase-5-source-build.md) | `integration-test/tests-complete.md` | `integration-test/reports/build-source.md` (gate) |
 | 6 | [Baseline execution](phase-6-baseline-execution.md) | Phase 5 build succeeded | `integration-test/reports/baseline-complete.md` |
@@ -40,7 +40,7 @@ flowchart TD
         P1["Phase 1<br/>Book generation"] --> P1g{"book.pdf?"}
         P1g -- no --> stop1(["stop"])
         P1g -- yes --> P2["Phase 2<br/>ADR generation"]
-        P2 --> P2g{"src/ADR-INDEX.md?"}
+        P2 --> P2g{"ADR-INDEX.md?"}
         P2g -- no --> stop2(["stop"])
         P2g -- yes --> P3["Phase 3<br/>Harness design"]
         P3 --> P3g{"harness-complete.md?"}
@@ -88,14 +88,23 @@ flowchart TD
 
 ## How it runs
 
-`codeweave.yml` orchestrates Phases 1–6 by calling a per-phase reusable workflow
-(`.github/workflows/phase-*.yml`) and sharing bootstrap via the
-`.github/actions/codeweave-setup` composite action. Phase 7 (`phase-7-optimize.yml`)
-and Phase 8 (`phase-8-report.yml`) run as two dedicated, **auto-chaining** workflows:
-Phase 7 runs one optimization per dispatch and triggers the next (or Phase 8) via
-`gh workflow run`. When Phase 6 produces a baseline, `codeweave.yml`'s
-`trigger-phase-7` job dispatches the first Phase 7 cycle automatically, so a single
-dispatch of `codeweave.yml` runs all eight phases end-to-end.
+The pipeline runs two ways:
+
+- **GitHub Actions** — `codeweave.yml` orchestrates Phases 1–6 by calling a per-phase
+  reusable workflow (`.github/workflows/phase-*.yml`) and sharing bootstrap via the
+  `.github/actions/codeweave-setup` composite action. Phase 7 (`phase-7-optimize.yml`)
+  and Phase 8 (`phase-8-report.yml`) run as two dedicated, **auto-chaining** workflows:
+  Phase 7 runs one optimization per dispatch and triggers the next (or Phase 8) via
+  `gh workflow run`. When Phase 6 produces a baseline, `codeweave.yml`'s
+  `trigger-phase-7` job dispatches the first Phase 7 cycle automatically, so a single
+  dispatch of `codeweave.yml` runs all eight phases end-to-end.
+- **Local runner for Phases 1–2** — `run-local.sh` runs the book and ADR phases
+  against a repository on disk (no GitHub needed), through the same step scripts the
+  Phase 1–2 workflows call (`.github/scripts/phase-{1,2}.sh`). See
+  [Local runs](local-runs.md).
+
+All target-side output goes to one folder in the target, `codeweave-results/`; see
+[Phase 2](phase-2-adr-generation.md).
 
 > **Runner assumption (Phases 5–8).** Phases 5/6 build an editable `integration-test/.venv`
 > and a compiled `src/` tree that are **not** committed to git. Phases 6, 7, and 8
@@ -167,6 +176,8 @@ These are not repeated in the per-phase pages.
 | 8 (report) | `read`, `write`, `edit`, `create`, `shell` (git denied) | Authoring task; verdicts already computed by `ab_compare.py` |
 
 All Copilot invocations use `--no-ask-user` (non-interactive). Every phase except the Phase 7 optimization agent denies `shell(git:*)` — the pipeline owns all commits.
+
+With `AGENT_CLI=claude`, Phases 1–2 run Claude Code instead, with a narrower allowance: only the `Read`, `Write`, `Edit`, `Glob` and `Grep` tools (no `Bash`, no web), and none of the machine's own Claude Code settings, hooks, plugins, MCP servers or `CLAUDE.md` files. See [Local runs](local-runs.md#the-agent).
 
 ## Configuration flow
 

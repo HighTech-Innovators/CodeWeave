@@ -101,7 +101,7 @@ A fourth use is to stand up repeatable energy and performance measurement as reu
 
 ## Quickstart
 
-CodeWeave runs as GitHub Actions workflows rather than as a local command-line tool. The later phases build and measure a native target, so they require a machine that persists state between phases.
+CodeWeave runs as GitHub Actions workflows, or for Phases 1–2 [locally against a repository on disk](#run-locally-against-a-repository-on-disk). On Actions, the later phases build and measure a native target, so they require a machine that persists state between phases.
 
 ### Prerequisites
 
@@ -132,6 +132,19 @@ gh workflow run codeweave.yml
 A single dispatch cascades through the whole system. The first six phases document and baseline the target, after which `codeweave.yml` automatically dispatches Phase 7. Phase 7 optimizes one hotspot, gates it, measures a paired A/B experiment, records a verdict with its energy and carbon figures, and then dispatches the next cycle itself. The final cycle chains into Phase 8, which writes a ranked report and drafts a pull request for each result worth submitting. You dispatched once, and the pipeline ran an entire measurement campaign and handed back reviewable branches.
 
 You can resume from any phase with `-f start_from_phase=N` for N from 1 to 6. The gates, inputs, and outputs of every phase are documented in [`docs/index.md`](docs/index.md).
+
+Everything CodeWeave writes into the target repository lives in one folder, `codeweave-results/` (ADRs, their index and scope map, the validator's report, and copies of the book and PDFs), so it cannot collide with the target's own folders. The pipeline undoes any change an agent makes outside it.
+
+### Run locally against a repository on disk
+
+`run-local.sh` runs Phases 1–2 (book and ADRs) on your own machine, using the same step scripts as the workflows (`.github/scripts/phase-{1,2}.sh`). The target does not need to be on GitHub: CodeWeave works on a bare copy of it and never writes to your repository. Local runs use Claude Code as the agent by default (`--agent copilot` for the Copilot CLI).
+
+```sh
+./run-local.sh init my-game ~/code/my-game   # picks the Unity profile for a Unity project
+./run-local.sh run my-game                   # Phase 1, then Phase 2
+```
+
+See [`docs/local-runs.md`](docs/local-runs.md) for setup, the agent, results, and settings. On GitHub Actions, `AGENT_CLI` in `.github/codeweave.config` selects the agent for Phases 1–2: `copilot` (default) or `claude` (Claude Code CLI, headless; needs the `ANTHROPIC_API_KEY` secret).
 
 ---
 

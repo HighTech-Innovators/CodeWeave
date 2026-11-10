@@ -9,6 +9,9 @@ The flow runs as **GHA workflows**: `codeweave.yml` for Phases 1–6; `phase-7-o
 **Key Components:**
 - **Workflow:** `.github/workflows/codeweave.yml` — orchestrator for Phases 1–6; it calls per-phase reusable workflows (`.github/workflows/phase-*.yml`) and shares bootstrap via the `.github/actions/codeweave-setup` composite action
 - **Optimization workflow:** `.github/workflows/phase-7-optimize.yml` — One optimization per run, auto-chaining (Phase 7); `.github/workflows/phase-8-report.yml` — aggregate report (Phase 8)
+- **Agent for Phases 1–2:** `AGENT_CLI` (`copilot` default, or `claude` = Claude Code CLI headless via `claude_pass` in `.github/scripts/lib/common.sh`, rendered by `lib/claude-stream.js`). Phases 3–8 call Copilot directly
+- **Local runner for Phases 1–2:** `run-local.sh` — book + ADRs against a repository on disk via a bare copy (Claude Code by default); runs the same step scripts as the workflows (`.github/scripts/phase-{1,2}.sh`, helpers in `.github/scripts/lib/common.sh`). Project-type constraints live in `profiles/<name>/constraints/` (`generic` fallback, `unity`)
+- **Target output folder:** everything CodeWeave writes into the target goes under `src/codeweave-results/` (ADRs at `adr/<source dir>/ADR.md`, `adr-scope.md`, `ADR-INDEX.md`, `ADR-VALIDATION.md`, `adrs-complete.md`, plus copies of the book and PDFs). Phase 2 undoes any change outside it
 - **Configuration:** `.github/codeweave.config` — Environment variables for external repo, branch, iterations, model schedules, and git identity
 - **Phase 1 Work Definition:** `work/1-generate-book.md` / `work/1-validate-book.md` — Book generation and validation prompts
 - **Phase 2 Work Definition:** `work/2-generate-adrs.md` / `work/2-validate-adrs.md` — ADR generation and validation prompts
@@ -40,13 +43,13 @@ Phases 1–4 follow a **generate+validate loop pattern**; Phases 5–8 (the meas
 3. **Phase 2 — ADR Generation** (up to `PHASE2_MAX_ITERATIONS`, only if Phase 1 produced a PDF):
    - Each iteration is a generate pass followed by a validate pass
    - Generate: invokes Copilot with a prompt to work on `work/2-generate-adrs.md` / `constraints/project.md`, using `./book` as reference
-   - Validate: invokes Copilot with a prompt to validate per `work/2-validate-adrs.md` — the validator is the **only** agent allowed to write `src/adrs-complete.md`
+   - Validate: invokes Copilot with a prompt to validate per `work/2-validate-adrs.md` — the validator is the **only** agent allowed to write `src/codeweave-results/adrs-complete.md`
    - After each iteration, commits and pushes ADR changes directly to the target repo's work branch
    - Captures output to `proof/2-adrs-generation-N.md` / `proof/2-adrs-generation-session-N.md` (generate) and `proof/2-adrs-validation-N.md` / `proof/2-adrs-validation-session-N.md` (validate)
-   - After Phase 2, builds `adr.pdf` and generates `src/ADR-INDEX.md`
-   - **Early Exit**: Stops if `src/adrs-complete.md` is present after a validate pass
+   - After Phase 2, builds `adr.pdf` and generates `src/codeweave-results/ADR-INDEX.md`
+   - **Early Exit**: Stops if `src/codeweave-results/adrs-complete.md` is present after a validate pass
 
-4. **Phase 3 — Performance Measurement** (up to `PHASE3_MAX_ITERATIONS`, only if Phase 2 produced `src/ADR-INDEX.md`):
+4. **Phase 3 — Performance Measurement** (up to `PHASE3_MAX_ITERATIONS`, only if Phase 2 produced `src/codeweave-results/ADR-INDEX.md`):
    - Each iteration is a generate pass followed by a validate pass
    - Generate: invokes Copilot with a prompt to work on `work/3-generate-harness.md` / `constraints/project.md`, reading `constraints/harness.md` and `constraints/harness-context.md` for additional context; uses `./book` and `./integration-test` as reference
    - Validate: invokes Copilot with a prompt to validate per `work/3-validate-harness.md` — the validator is the **only** agent allowed to write `integration-test/harness-complete.md`
@@ -144,7 +147,7 @@ These run after Phase 4 produces `tests-complete.md`. In GHA they span the main 
 
 ### 6. Early Stopping
 - **Phase 1**: Early exit triggered by presence of `book/manuscript-complete.md` after any validate pass — written exclusively by the book validator
-- **Phase 2**: Early exit triggered by presence of `src/adrs-complete.md` after any validate pass — written exclusively by the ADR validator
+- **Phase 2**: Early exit triggered by presence of `src/codeweave-results/adrs-complete.md` after any validate pass — written exclusively by the ADR validator
 - **Phase 3**: Early exit triggered by presence of `integration-test/harness-complete.md` after any validate pass — written exclusively by the strategy validator
 - **Phase 4**: Early exit triggered by presence of `integration-test/tests-complete.md` after any validate pass — written exclusively by the tests validator
 - The pipeline deletes completion markers before each **generate** pass to prevent stale markers from skipping the next validate cycle
@@ -195,12 +198,12 @@ Edit `.github/codeweave.config`:
 | `.github/workflows/phase-{1-book,2-adr,3-harness,4-tests,5-6-build-baseline}.yml` | Per-phase reusable workflows (`workflow_call`) for Phases 1–6 |
 | `.github/actions/codeweave-setup/action.yml` | Composite action: shared bootstrap (Node 22 + Copilot CLI + load `codeweave.config` + git identity) |
 | `.github/codeweave.config` | Runtime configuration (external repo, branch, iterations, model schedules, git identity) |
-| `.github/scripts/generate-indexes.js` | Generates `book/BOOK-INDEX.md` (after Phase 1) and `src/ADR-INDEX.md` (after Phase 2) |
+| `.github/scripts/generate-indexes.js` | Generates `book/BOOK-INDEX.md` (after Phase 1) and `src/codeweave-results/ADR-INDEX.md` (after Phase 2) |
 | `.github/scripts/load-harness-manifest.js` | Reads `integration-test/harness-manifest.json` for the GHA workflows (toolchain values → `eval`-able exports + `$GITHUB_ENV`); same built-in defaults |
 | `work/1-generate-book.md` | Phase 1 generation prompt |
 | `work/1-validate-book.md` | Phase 1 validation prompt (exclusively owns `book/manuscript-complete.md`) |
 | `work/2-generate-adrs.md` | Phase 2 generation prompt |
-| `work/2-validate-adrs.md` | Phase 2 validation prompt (exclusively owns `src/adrs-complete.md`) |
+| `work/2-validate-adrs.md` | Phase 2 validation prompt (exclusively owns `src/codeweave-results/adrs-complete.md`) |
 | `work/3-generate-harness.md` | Phase 3 generation prompt |
 | `work/3-validate-harness.md` | Phase 3 validation prompt (exclusively owns `integration-test/harness-complete.md`) |
 | `work/4-generate-tests.md` | Phase 4 generation prompt |
@@ -257,7 +260,7 @@ For a single manual Copilot iteration:
 
 - The workflow does **not** create or modify `.github/copilot-instructions.md` — this file is purely for future Copilot sessions
 - Generators must never write their own completion markers — only the corresponding validator may do so
-- Phase 2 only runs if Phase 1 produced `book.pdf`; Phase 3 only runs if Phase 2 produced `src/ADR-INDEX.md`; Phase 4 only runs if Phase 3 produced `integration-test/harness-complete.md`; Phase 6 only runs if Phase 4 produced `integration-test/tests-complete.md`
+- Phase 2 only runs if Phase 1 produced `book.pdf`; Phase 3 only runs if Phase 2 produced `src/codeweave-results/ADR-INDEX.md`; Phase 4 only runs if Phase 3 produced `integration-test/harness-complete.md`; Phase 6 only runs if Phase 4 produced `integration-test/tests-complete.md`
 - Phase 2 commits and pushes ADR changes to the target repo's work branch after each iteration
 - Each outer-repo commit is atomic per pass; no partial/rollback logic
 - The `proof/` directory is committed and pushed along with code changes

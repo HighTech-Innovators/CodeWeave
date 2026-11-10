@@ -3,8 +3,8 @@
  * generate-indexes.js
  *
  * Generates:
- *   book/BOOK-INDEX.md — chapter list with section headings and line numbers
- *   src/ADR-INDEX.md   — all ADR.md files with role summaries
+ *   book/BOOK-INDEX.md                  — chapter list with section headings and line numbers
+ *   src/codeweave-results/ADR-INDEX.md  — every ADR under src/codeweave-results/adr/ with its role
  *
  * Run from the repository root (where book/ and src/ live).
  * An explicit --outer-repo <path> override is available if needed.
@@ -26,6 +26,10 @@ const adrOnly  = args.includes('--generate-adr-index');
 
 const bookDir  = path.join(outerRepo, 'book');
 const srcDir   = path.join(outerRepo, 'src');
+// Everything CodeWeave writes into the target lives in one folder; keep in
+// sync with CW_RESULTS_DIR in .github/scripts/lib/common.sh.
+const resultsDir = path.join(srcDir, 'codeweave-results');
+const adrRoot    = path.join(resultsDir, 'adr');
 const today    = new Date().toISOString().slice(0, 10);
 
 // ---------------------------------------------------------------------------
@@ -148,15 +152,15 @@ function findAdrFiles(dir, base) {
 }
 
 function generateAdrIndex() {
-  if (!fs.existsSync(srcDir)) {
-    console.warn(`⚠ src directory not found at ${srcDir} — skipping ADR index`);
+  if (!fs.existsSync(adrRoot)) {
+    console.warn(`⚠ ADR directory not found at ${adrRoot} — skipping ADR index`);
     return false;
   }
 
-  const adrs = findAdrFiles(srcDir, '');
+  const adrs = findAdrFiles(adrRoot, '');
 
   if (adrs.length === 0) {
-    console.warn(`⚠ No ADR.md files found under ${srcDir} — skipping ADR index`);
+    console.warn(`⚠ No ADR.md files found under ${adrRoot} — skipping ADR index`);
     return false;
   }
 
@@ -166,11 +170,12 @@ function generateAdrIndex() {
     `${adrs.length} Architecture Decision Records · generated ${today}`,
     '',
     'Each `ADR.md` describes the role, key files, public interface, dependencies,',
-    'design rationale, constraints, and observability of one directory.',
+    'design rationale, constraints, and observability of one source directory.',
+    'The ADR for source directory `<dir>` is `adr/<dir>/ADR.md`.',
     '',
     '---',
     '',
-    '| # | Path | Role |',
+    '| # | Directory | Role |',
     '|---:|---|---|',
   ];
 
@@ -187,14 +192,17 @@ function generateAdrIndex() {
     const roleIdx = fileLines.findIndex(l => /^## Role/.test(l));
     const role = roleIdx !== -1 ? extractRoleSummary(fileLines, roleIdx) : '—';
 
-    // Relative link from src/ADR-INDEX.md — rel already starts without leading /
-    const relPath = rel.startsWith(path.sep) ? rel.slice(1) : rel;
-    lines.push(`| ${i + 1} | [${relPath}](${relPath}) | ${role} |`);
+    // Label: the source directory. Link: relative to ADR-INDEX.md, URL-encoded
+    // per segment so directories with spaces still resolve.
+    const parts   = rel.split(path.sep).filter(Boolean);
+    const dir     = parts.slice(0, -1).join('/') || '.';
+    const href    = ['adr', ...parts].map(encodeURIComponent).join('/');
+    lines.push(`| ${i + 1} | [${dir}](${href}) | ${role} |`);
   }
 
   lines.push('');
 
-  const out = path.join(srcDir, 'ADR-INDEX.md');
+  const out = path.join(resultsDir, 'ADR-INDEX.md');
   fs.writeFileSync(out, lines.join('\n'));
   console.log(`✓ ADR index written → ${out}  (${adrs.length} ADRs)`);
   return true;

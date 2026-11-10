@@ -33,3 +33,8 @@ runs:
         git config user.name "$GIT_USER_NAME"
         git config user.email "$GIT_USER_EMAIL"
         git config advice.addIgnoredFile false
+
+    - name: Install Claude Code CLI (AGENT_CLI=claude)
+      if: env.AGENT_CLI == 'claude'
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code
