@@ -10,7 +10,8 @@ SRC="$1"
 ORIG="${SOURCE_REPO_PATH:?SOURCE_REPO_PATH not set}"
 
 if [ ! -d "$SRC/Library" ]; then
-  if pgrep -f -- "-projectPath[= ]*$ORIG( |$)" > /dev/null 2>&1; then
+  # Unity Hub passes -projectpath (lower case), scripts often -projectPath.
+  if pgrep -if -- "-projectpath[= ]*$ORIG/?( |$)" > /dev/null 2>&1; then
     echo "Unity has $ORIG open — Library/ not seeded; the first build imports everything (slow, but correct)."
   elif [ -d "$ORIG/Library" ]; then
     rm -rf "$SRC/Library.seeding"

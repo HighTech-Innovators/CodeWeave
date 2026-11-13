@@ -57,7 +57,10 @@ step_publish() {
   git -C "$pub" commit -q -m "CodeWeave: optimization results" || echo "nothing new to publish"
   git -C "$pub" push -q --no-verify origin "HEAD:$EXTERNAL_REPO_WORK_BRANCH"
   git -C src worktree remove --force "$pub"
-  echo "published to $EXTERNAL_REPO_WORK_BRANCH:$CW_RESULTS_DIR/optimization/"
+  # Leave ./src on the results branch, so workspace/src/$CW_RESULTS_DIR/ shows everything on disk
+  # (Phase 7 left it on the last optimization's branch; each cycle checks out its own branch again).
+  git -C src checkout -q -f "$EXTERNAL_REPO_WORK_BRANCH" || echo "WARNING: could not check out $EXTERNAL_REPO_WORK_BRANCH in ./src"
+  echo "published to $EXTERNAL_REPO_WORK_BRANCH:$CW_RESULTS_DIR/optimization/ (on disk: workspace/src/$CW_RESULTS_DIR/)"
 }
 
 case "${1:-}" in

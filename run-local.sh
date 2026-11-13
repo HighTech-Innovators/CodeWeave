@@ -373,11 +373,13 @@ cmd_check() {
   load_env "$dir"
   ensure_tools_venv
   mkdir -p "$CW_MEASURE"
+  # The same trees the phases give the harness (lib/local.sh), so quiet.sh finds the target's tools.
+  export CW_SRC="$dir/workspace/src" CW_BASE="$dir/workspace/base"
   local quiet=()
   [ -f "$dir/workspace/integration-test/quiet.sh" ] \
     && quiet=(--quiet-check "cd '$dir/workspace' && bash integration-test/quiet.sh --check")
   "$CW_PY" "$CW_ROOT/.github/scripts/tools/machine.py" check --state "$CW_MEASURE/state.env" \
-    --path "$CW_MEASURE" ${quiet[@]+"${quiet[@]}"} | grep -v '^{'
+    --path "$CW_MEASURE" --min-free-gb "${MEASURE_MIN_FREE_GB:-15}" ${quiet[@]+"${quiet[@]}"} | grep -v '^{'
 }
 
 cmd_status() {

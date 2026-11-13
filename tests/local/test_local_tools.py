@@ -228,5 +228,95 @@ class IntegrityTest(unittest.TestCase):
         self.assertEqual(run(TOOLS / "integrity.py", "verify", "--root", ws, "--manifest", tmp / "m.json", ok=(1,)).returncode, 1)
 
 
+class MeasureTest(unittest.TestCase):
+    """measure.py with a fake harness whose run.sh fails for artefacts named *broken*."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        h = self.tmp / "harness"; h.mkdir()
+        (h / "run.sh").write_text(
+            '#!/bin/bash\n'
+            'while [ $# -gt 0 ]; do case "$1" in --artifact) art="$2"; shift 2;; --out) out="$2"; shift 2;; *) shift;; esac; done\n'
+            'case "$art" in *broken*) exit 1;; esac\n'
+            'printf \'{"views":{"landing":{"frame_ms":5,"cpu_ms":3,"gpu_ms":4}},"noise":{"quiet":true}}\' > "$out/metrics.json"\n')
+        (h / "run.sh").chmod(0o755)
+        self.harness = h
+
+    def block(self, a, b, ok):
+        out = self.tmp / "block"
+        r = run(TOOLS / "measure.py", "game", "--name", "t", "--out", out, "--harness", self.harness,
+                "--a", a, "--b", b, "--pairs", "3", "--heat-soak", "0", "--gap", "0", "--window", "",
+                "--ignore-thermal", ok=ok)
+        return r, json.loads((out / "records.json").read_text())
+
+    def test_broken_base_aborts_block(self):
+        r, rec = self.block("A-broken", "B", ok=(2,))
+        self.assertTrue(rec["aborted"])
+        self.assertFalse(rec["complete"])
+        self.assertIn("ABORTED", r.stdout)
+        self.assertLessEqual(len(rec["launches"]), 4)       # stops early, not after the whole block
+
+    def test_broken_change_is_incomplete_not_aborted(self):
+        _, rec = self.block("A", "B-broken", ok=(1,))
+        self.assertFalse(rec.get("aborted", False))
+        self.assertFalse(rec["complete"])
+
+    def test_working_block_completes(self):
+        _, rec = self.block("A", "B", ok=(0,))
+        self.assertTrue(rec["complete"])
+        self.assertEqual(rec["whole_pairs"], 3)
+
+    def test_thermal_threshold(self):
+        import types
+        sys.path.insert(0, str(TOOLS))
+        import measure
+        fake = types.SimpleNamespace(args=types.SimpleNamespace(
+            ignore_thermal=False, max_thermal=1, kind="bench", window=""))
+        e = {"exit_code": 0, "metrics": {"median_ns": 1}, "thermal_before": 0, "thermal_after": 1}
+        self.assertIsNone(measure.Block.problem(fake, e))                 # moderate, steady or rising: counted
+        self.assertIn("thermal", measure.Block.problem(fake, dict(e, thermal_after=2)))  # heavy: repeated
+        fake.args.max_thermal = 0
+        self.assertIn("thermal", measure.Block.problem(fake, e))
+
+
+class GateCompareTest(unittest.TestCase):
+    def judge(self, base, change, base_rc=1, change_rc=1):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "base.log").write_text(base)
+        (tmp / "change.log").write_text(change)
+        r = run(TOOLS / "gate_compare.py", "--base", tmp / "base.log", "--base-rc", base_rc,
+                "--change", tmp / "change.log", "--change-rc", change_rc, ok=(0, 1))
+        return r.returncode, r.stdout
+
+    def test_same_failures_as_the_base_are_accepted(self):
+        log = "Failed!  - Failed: 23\ntotal: 845 tests (822 passed, 23 failed); FAILED\n"
+        rc, why = self.judge(log, log)
+        self.assertEqual(rc, 0, why)
+        self.assertIn("base fails the same way", why)
+
+    def test_a_gate_the_base_passes_must_pass(self):
+        rc, _ = self.judge("total: 10 tests (10 passed, 0 failed)", "total: 10 tests (9 passed, 1 failed)", base_rc=0)
+        self.assertEqual(rc, 1)
+
+    def test_more_failures_or_fewer_tests_are_rejected(self):
+        base = "total: 845 tests (822 passed, 23 failed)"
+        self.assertEqual(self.judge(base, "total: 845 tests (821 passed, 24 failed)")[0], 1)
+        self.assertEqual(self.judge(base, "total: 800 tests (777 passed, 23 failed)")[0], 1)
+
+    def test_a_new_named_failure_is_rejected_even_with_equal_counts(self):
+        base = "  FAIL A.One: boom\ntotal: 5 tests (4 passed, 1 failed)"
+        change = "  FAIL A.Two: boom\ntotal: 5 tests (4 passed, 1 failed)"
+        rc, why = self.judge(base, change)
+        self.assertEqual(rc, 1)
+        self.assertIn("A.Two", why)
+        self.assertEqual(self.judge(base, base)[0], 0)
+
+    def test_no_counts_cannot_be_compared(self):
+        self.assertEqual(self.judge("total: 5 tests (4 passed, 1 failed)", "crashed")[0], 1)
+
+    def test_a_passing_change_is_accepted(self):
+        self.assertEqual(self.judge("", "", change_rc=0)[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

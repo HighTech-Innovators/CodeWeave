@@ -113,9 +113,22 @@ later) when the Mac is not fit.
 both builds exist before measuring; inside the target's machine reservation the Mac is
 first heat-soaked with discarded launches (`MEASURE_HEAT_SOAK`, default 180 s), each side
 gets a discarded warm-up launch, then `MEASURE_PAIRS` (6) A/B pairs alternate (ABBA, or
-BAAB in every other cycle). A launch that was not quiet, saw thermal pressure, or had work
-still loading is repeated in the same slot. The verdict uses a paired test on log(B/A)
-with the noise of the Phase 6 A/A experiment (`.github/scripts/tools/ab_frames.py`).
+BAAB in every other cycle). A launch that was not quiet, saw thermal pressure above
+`MEASURE_MAX_THERMAL` (default 1, "moderate", where a heat-soaked fanless Mac settles; A
+and B alternate in it alike), or had work still loading is repeated in the same slot.
+When the base build's launches fail three times in a row, the block stops with the
+launch log instead of running on (the harness or the Mac is broken, not the change).
+Before each block the readiness check waits up to `MEASURE_READY_WAIT` seconds (default
+1200) for a Mac that is still warm or busy from a build. The verdict uses a paired test
+on log(B/A) with the noise of the Phase 6 A/A experiment (`.github/scripts/tools/ab_frames.py`).
+
+**Correctness gates against the base:** a gate (`test.sh core`, the scopes for the
+changed paths, self-tests) that fails on the change is run once on the unchanged base in
+the same tree (the change set aside, then put back; cached for the run). It still passes
+when the base fails it the same way: no fewer tests ran, no more failed, and no failed
+test is named that passes on the base (`.github/scripts/tools/gate_compare.py`). Tests
+that already fail in the target are listed in the optimization's report instead of
+blocking every optimization. Gates time out after `TEST_TIMEOUT` seconds (default 1800).
 
 **Integrity:** the harness, benchmarks and plan are frozen by checksum (any change stops
 the run); the agent's edits to tests, tools, measuring code and project settings are
@@ -127,7 +140,9 @@ that looks like it touches measuring caps a KEEP at INVESTIGATE.
 
 Read the results as files — no Git needed:
 
-- `workspace/book.pdf`, `workspace/adr.pdf`, `workspace/src/codeweave-results/`
+- `workspace/book.pdf`, `workspace/adr.pdf`, `workspace/src/codeweave-results/` (after Phase 8
+  also `optimization/`, starting with `phase8-report.md`; `workspace/src` is then on the
+  `codeweave-work` branch)
 - Phases 3–8: `workspace/integration-test/` (design, harness, `reports/`:
   `baseline.md`, `ab-comparison-optN.md`, `phase8-report.md`)
 
@@ -145,7 +160,8 @@ Logs and agent session transcripts for every pass are in `workspace/proof/`.
 
 Edit `target.env` to override anything from `.github/.env`, e.g. iterations, models,
 `PHASE7_MAX_OPTIMIZATIONS`, `GAME_WINDOW` (window size for game measurements),
-`MEASURE_PAIRS`, `MEASURE_HEAT_SOAK`, `CHECKPOINTS`. Put project-specific notes for the
+`MEASURE_PAIRS`, `MEASURE_HEAT_SOAK`, `MEASURE_MAX_THERMAL`, `MEASURE_READY_WAIT`,
+`MEASURE_MIN_FREE_GB` (free disk the readiness check asks for, default 15), `CHECKPOINTS`. Put project-specific notes for the
 agent in `<run>/constraints/project.md` to replace the profile's file.
 
 `./run-local.sh reset <name>` deletes the workspace, the measurements and the CodeWeave

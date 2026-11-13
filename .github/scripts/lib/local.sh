@@ -117,18 +117,31 @@ agent_stop() {   # an agent pass failed (usage limit, network): resumable, not a
 
 machine_ready() {   # [--record-display]
   if [ "${DRY_RUN:-false}" = "true" ]; then echo "DRY RUN: machine readiness not checked"; return 0; fi
-  local out rc=0
-  out=$("$CW_PY" "$CW_TOOLS/machine.py" check --state "$STATE" --path "$CW_MEASURE" \
-        --quiet-check "bash $HARNESS/quiet.sh --check" "$@") || rc=$?
+  # A Mac that is warm or busy right after a build usually settles by itself: wait
+  # (MEASURE_READY_WAIT seconds, default 20 min) before stopping the run.
+  local out rc waited=0 wait_max="${MEASURE_READY_WAIT:-1200}" poll=60
+  while :; do
+    rc=0
+    out=$("$CW_PY" "$CW_TOOLS/machine.py" check --state "$STATE" --path "$CW_MEASURE" \
+          --min-free-gb "${MEASURE_MIN_FREE_GB:-15}" \
+          --quiet-check "bash $HARNESS/quiet.sh --check" "$@") || rc=$?
+    [ $rc -eq 0 ] && break
+    if [ $waited -ge "$wait_max" ]; then
+      echo "$out" | grep -v '^{' || true
+      echo "The Mac is still not fit to measure after ${waited} s (see above). Fix it and rerun the same phase to resume." >&2
+      exit $EXIT_RESUMABLE
+    fi
+    [ $waited -eq 0 ] && { echo "$out" | grep -v '^{' || true; echo "Not fit to measure yet — waiting up to ${wait_max} s for the Mac to settle…"; }
+    sleep $poll
+    waited=$((waited + poll))
+  done
   echo "$out" | grep -v '^{' || true
-  if [ $rc -ne 0 ]; then
-    echo "The Mac is not fit to measure (see above). Fix it and rerun the same phase to resume." >&2
-    exit $EXIT_RESUMABLE
-  fi
+  [ $waited -eq 0 ] || echo "(the Mac settled after ${waited} s)"
 }
 
 # measure_block KIND NAME A B ORDER [ENTRY] — one A/B block inside the
-# target's machine reservation. Returns measure.py's status (0 complete, 1 incomplete).
+# target's machine reservation. Returns measure.py's status (0 complete, 1 incomplete,
+# 2 aborted: the base build's launches keep failing).
 measure_block() {
   local kind="$1" name="$2" a="$3" b="$4" order="$5" entry="${6:-}" soak gap
   verify_manifests

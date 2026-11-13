@@ -39,7 +39,7 @@ Write exactly the number of entries the instruction names, in this format:
 - **Measurement path**: game-frame
 - **View**: <a view name from baseline.md>
 - **Metric**: cpu_ms
-- **Bench**: <benchmark name or new:name — core-bench only>
+- **Bench**: <the name only: an existing benchmark, or new:name — core-bench only; describe a new one under Proposed change>
 - **Target files**: `src/...`
 - **Hotspot evidence**: <profile / book / code, with file:line>
 - **Proposed change**: <what to change, concretely>

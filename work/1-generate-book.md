@@ -649,6 +649,7 @@ Weak chapters must be rewritten, compressed, reorganized, or deferred explicitly
 * Do not declare a chapter "EXCELLENT" based solely on word count or number of tiers applied.
 * A chapter that passes thresholds in one session must be re-verified in the next — scores regress when new source investigation reveals gaps.
 * If all 16 scores land exactly at their target floor with no score above floor: treat this as a signal that scoring may be minimally compliant rather than genuine. Revisit the weakest chapters before declaring done.
+* A score describes the manuscript as it stands, not whether this session found errors. Technical Accuracy and Factual Restraint reach 9 once every chapter has been checked claim by claim against the source (across one or more sessions; record which chapters, when) and every error found has been corrected. Finding and fixing errors is what verification is for; it is not a reason to hold a score down, and a re-read that finds nothing is not required. Do not add criteria stricter than the Score Guidance table; if `agent-state/` holds such a rule from an earlier session, drop it and log remaining doubts in `agent-state/improvement-backlog.md`.
 
 Inflated scores produce premature publication-ready declarations. Underestimating quality is safe. Overestimating quality wastes iterations by blocking real improvement.
 

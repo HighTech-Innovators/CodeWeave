@@ -36,7 +36,15 @@ app bundle, executable or folder). Exit 0 on success. May take minutes; no measu
 | `selftest:<a,b,…>` | end-to-end checks with the built artefact given by `--artifact` |
 
 Exit 0 only if every requested test passed **and at least one test ran** in each
-requested scope (an empty selection is a failure). Print a summary with counts.
+requested scope (an empty selection is a failure). End the output with a summary line
+`total: N tests (P passed, F failed)`, and print each failed test as a line
+`FAIL <test name>[: message]` when the runner names it.
+
+Phase 7 judges a failed gate against the same gate on the unchanged base (run once,
+cached): it is accepted when the base fails it too, the change ran at least as many
+tests, failed no more of them, and names no failed test the base passes. Tests that
+already fail in the target therefore do not block every optimization, and the report
+lists them. Without the summary line a failed gate cannot be compared and stays failed.
 
 ## `run.sh --artifact PATH --out DIR [--profile]`
 

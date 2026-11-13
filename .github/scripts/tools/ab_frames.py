@@ -331,6 +331,20 @@ def mode_bench(args):
 CAP_SIGNALS = {"visible-change", "measurement-sensitive-change", "tuning-change"}
 
 
+def guard_outcome(guard):
+    """The game block of a core-bench entry only guards against regressions: say that, not KEEP/REVERT."""
+    d, s = guard["decision"], guard["decision_signal"]
+    if d == "INCOMPLETE":
+        return f"incomplete ({s})"
+    if d == "REVERT" and s in ("regression", "regression-elsewhere"):
+        return f"REGRESSION ({s})"
+    if d == "KEEP":
+        return "no regression (the game is measurably faster too)"
+    if d == "REVERT" and s == "no-effect":
+        return "no regression (no measurable change in the game)"
+    return f"no regression ({d} {s})"
+
+
 def mode_verdict(args):
     primary = load(args.primary)
     guard = load(args.guard) if args.guard else None
@@ -352,14 +366,15 @@ def mode_verdict(args):
               "decision": decision, "decision_signal": signal,
               "primary_decision": f"{primary['decision']} ({primary['decision_signal']})",
               "caps": caps,
-              "guard_decision": f"{guard['decision']} ({guard['decision_signal']})" if guard else None}
+              "guard_decision": f"{guard['decision']} ({guard['decision_signal']})" if guard else None,
+              "guard_outcome": guard_outcome(guard) if guard else None}
     for key in ("p_value_e2e", "delta_e2e_pct", "e2e_mde_pct", "delta_micro_pct", "micro_detail",
                 "view", "metric", "entry"):
         if key in primary:
             result[key] = primary[key]
     md = (f"# Verdict: optimization {args.opt}\n\n**{decision}** ({signal})\n\n"
           f"- Primary ({result['measurement_path']}): {result['primary_decision']}\n"
-          + (f"- Regression guard (game): {result['guard_decision']}\n" if guard else "")
+          + (f"- Regression guard (game): {result['guard_outcome']}\n" if guard else "")
           + (f"- Caps: {', '.join(caps)}\n" if caps else ""))
     write(args.out, result, md)
     print(f"verdict opt{args.opt}: {decision} ({signal})")

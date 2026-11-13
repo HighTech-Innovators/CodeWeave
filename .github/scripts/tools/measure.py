@@ -14,10 +14,15 @@ Protocol:
   3. --pairs pairs in alternating order: ABBA… (or BAAB… with --order BAAB).
   4. Each launch records thermal pressure before/after and the harness's noise
      report. A launch is discarded and repeated in the same slot (max --retries)
-     when it failed, was not quiet, the thermal level changed or was raised, or
-     work was still pending; a wrong window size aborts the block.
+     when it failed, was not quiet, the thermal level went above --max-thermal
+     (default 1, "moderate": a heat-soaked fanless Mac sits there, and A and B
+     alternate in it alike), or work was still pending; a wrong window size
+     aborts the block.
   5. The block is complete when at least pairs-1 pairs are whole and discards
      are not lopsided between the sides.
+  6. When --max-a-failures A launches in a row fail (A is the base build, so the
+     harness or the machine is broken, not the change), the block is aborted:
+     exit 2, with the last launch's log, instead of spending the whole block.
 
 The harness scripts (frozen at Checkpoint 1) are called as:
   game:  run.sh   --artifact APP --out LAUNCH_DIR
@@ -70,12 +75,17 @@ def run_with_timeout(cmd, timeout, log_path, env):
             return 124
 
 
+class Aborted(Exception):
+    pass
+
+
 class Block:
     def __init__(self, args):
         self.args = args
         self.out = Path(args.out)
         self.out.mkdir(parents=True, exist_ok=True)
         self.seq = 0
+        self.a_failures = 0
         self.record = {
             "name": args.name, "kind": args.kind, "order": args.order,
             "entry": getattr(args, "entry", None), "pairs_planned": args.pairs,
@@ -130,6 +140,12 @@ class Block:
         print(f"  [{self.seq:03d}] {side} {role}{'' if pair is None else ' ' + str(pair)}: "
               f"{'ok' if not entry['discarded'] else 'discarded (' + str(entry['reason']) + ')'} "
               f"in {duration:.0f} s, thermal {t_before}→{t_after}", flush=True)
+        if side == "A":
+            failed = rc != 0 or not metrics
+            self.a_failures = self.a_failures + 1 if failed else 0
+            if failed and self.a_failures >= self.args.max_a_failures:
+                raise Aborted(f"{self.a_failures} launches of A (the base build) in a row failed; "
+                              f"last: exit {rc}, log {ldir / 'launch.log'}")
         time.sleep(self.args.gap)
         return entry
 
@@ -137,10 +153,9 @@ class Block:
         m = e["metrics"]
         if e["exit_code"] != 0 or not m:
             return f"failed launch (exit {e['exit_code']})"
-        if not self.args.ignore_thermal and (
-                e["thermal_before"] not in (None, 0) or e["thermal_after"] not in (None, 0)
-                or e["thermal_before"] != e["thermal_after"]):
-            return f"thermal pressure {e['thermal_before']}→{e['thermal_after']}"
+        hot = [t for t in (e["thermal_before"], e["thermal_after"]) if t is not None and t > self.args.max_thermal]
+        if hot and not self.args.ignore_thermal:
+            return f"thermal pressure {e['thermal_before']}→{e['thermal_after']} (above {self.args.max_thermal})"
         noise = m.get("noise") or {}
         if noise.get("quiet") is False:
             return "not quiet: " + ", ".join(noise.get("reasons") or ["unspecified"])
@@ -159,6 +174,22 @@ class Block:
         return None
 
     def run(self):
+        try:
+            return self.measure()
+        except Aborted as why:
+            self.record["incomplete_reason"] = f"aborted: {why}"
+            self.record["aborted"] = True
+            self.record["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            self.save()
+            print(f"block {self.args.name}: ABORTED — {why}", flush=True)
+            last = self.record["launches"][-1]["out_dir"] if self.record["launches"] else None
+            if last and (Path(last) / "launch.log").is_file():
+                print(f"---- last 25 lines of {last}/launch.log ----", flush=True)
+                lines = (Path(last) / "launch.log").read_text(errors="replace").splitlines()
+                print("\n".join(lines[-25:]), flush=True)
+            return 2
+
+    def measure(self):
         a = self.args
         first, second = ("A", "B") if a.order == "ABBA" else ("B", "A")
         if a.heat_soak > 0:
@@ -211,6 +242,10 @@ def main():
     ap.add_argument("--retries", type=int, default=2)
     ap.add_argument("--gap", type=int, default=10)
     ap.add_argument("--launch-timeout", type=int, default=900)
+    ap.add_argument("--max-thermal", type=int, default=int(os.environ.get("MEASURE_MAX_THERMAL", "1")),
+                    help="highest thermal pressure level a counted launch may see (0 nominal, 1 moderate, 2 heavy)")
+    ap.add_argument("--max-a-failures", type=int, default=3,
+                    help="abort the block (exit 2) after this many failed A launches in a row")
     ap.add_argument("--ignore-thermal", action="store_true",
                     help="record thermal pressure but do not discard launches for it (dry runs only)")
     args = ap.parse_args()

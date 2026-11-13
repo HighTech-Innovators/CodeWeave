@@ -25,6 +25,8 @@ MAX_OPT="${PHASE7_MAX_OPTIMIZATIONS:-3}"
 entry_block() { awk -v n="$1" '/^## Optimization [0-9]+:/{on=($3==n":")} on' "$PLAN"; }
 entry_field() { entry_block "$1" | grep -m1 "^- \*\*$2\*\*:" | sed 's/^[^:]*: *//; s/[[:space:]]*$//; s/`//g'; }
 entry_name()  { grep -m1 "^## Optimization $1:" "$PLAN" | sed 's/^## Optimization [0-9]*: *//' | tr -cd 'A-Za-z0-9_-' | cut -c1-40; }
+# entry_bench N — the benchmark name only ("name" or "new:name"); words after it are description.
+entry_bench() { entry_field "$1" Bench | awk '{print $1}'; }
 val_field()   { grep -m1 "^- \*\*$1\*\*:" "$VAL" 2> /dev/null | sed 's/^[^:]*: *//; s/[[:space:]]*$//; s/`//g'; }
 
 validate_plan() {
@@ -32,11 +34,13 @@ validate_plan() {
   for n in $(seq 1 "$MAX_OPT"); do
     grep -q "^## Optimization $n:" "$PLAN" || { problems="$problems; entry $n missing"; continue; }
     path=$(entry_field "$n" "Measurement path")
-    view=$(entry_field "$n" "View"); metric=$(entry_field "$n" "Metric"); bench=$(entry_field "$n" "Bench")
+    view=$(entry_field "$n" "View"); metric=$(entry_field "$n" "Metric"); bench=$(entry_bench "$n")
     case "$path" in
       game-frame) [ -n "$view" ] && { [ "$metric" = frame_ms ] || [ "$metric" = cpu_ms ]; } \
                     || problems="$problems; entry $n: game-frame needs View and Metric (frame_ms|cpu_ms)" ;;
-      core-bench) [ -n "$bench" ] || problems="$problems; entry $n: core-bench needs Bench" ;;
+      core-bench) case "${bench#new:}" in
+                    ''|*[!A-Za-z0-9_-]*) problems="$problems; entry $n: core-bench needs Bench: a benchmark name or new:name (got '$bench')" ;;
+                  esac ;;
       *) problems="$problems; entry $n: Measurement path must be game-frame or core-bench (got '$path')" ;;
     esac
   done
@@ -46,10 +50,14 @@ validate_plan() {
 step_select() {
   mkdir -p proof "$REPORTS"
   if [ -f "$CW_MEASURE/manifests/plan.json" ]; then verify_manifests; echo "plan already selected and frozen"; return; fi
-  [ -f "$REPORTS/baseline.json" ] || [ "${DRY_RUN:-false}" = "true" ] || { echo "ERROR: run Phase 6 first" >&2; exit 1; }
+  [ -f "$REPORTS/baseline-complete.md" ] || [ "${DRY_RUN:-false}" = "true" ] \
+    || { echo "ERROR: no complete baseline ($REPORTS/baseline-complete.md) — run Phase 6 until it passes" >&2; exit 1; }
   local model n
   model=$(agent_model "${PHASE7_SELECTION_MODEL:-claude-opus-4.6}")
-  if [ "${DRY_RUN:-false}" = "true" ]; then
+  if [ -f "$PLAN" ] && validate_plan 2> /dev/null; then
+    # A rerun after a stop keeps the plan the selection pass already wrote (delete it for a new selection).
+    echo "optimization plan already written (kept: $PLAN)"
+  elif [ "${DRY_RUN:-false}" = "true" ]; then
     { echo "# Optimization plan (dry-run stub)"; echo
       for n in $(seq 1 "$MAX_OPT"); do
         if [ $((n % 2)) -eq 1 ]; then
@@ -70,7 +78,7 @@ step_select() {
 
   local new_benches=""
   for n in $(seq 1 "$MAX_OPT"); do
-    case "$(entry_field "$n" Bench)" in new:*) new_benches="$new_benches $n" ;; esac
+    case "$(entry_bench "$n")" in new:*) new_benches="$new_benches $n" ;; esac
   done
   if [ -n "$new_benches" ]; then author_benches $new_benches; fi
 
@@ -82,18 +90,24 @@ step_select() {
 # author_benches N... — write new benchmarks before any optimization exists,
 # check them on A, then refreeze the harness with them included.
 author_benches() {
-  local n names="" name out model
-  for n in "$@"; do names="$names $(entry_field "$n" Bench | sed 's/^new://')"; done
-  model=$(agent_model "${PHASE7_SELECTION_MODEL:-claude-opus-4.6}")
-  agent_pass "Work on the task described in work/7-author-bench.md. Add these benchmarks to integration-test/bench/:$names (see their entries in integration-test/optimization-plan.md). Change nothing else." \
-    "$model" proof/7-author-bench.md proof/7-author-bench-session.md || agent_stop
-  guard_target_unchanged proof/7-author-bench.md
-  git checkout -q HEAD -- .github work constraints 2> /dev/null || true
-  local f
-  for f in $HARNESS_FILES; do
-    [ "$f" = bench ] && continue
-    git ls-files --error-unmatch "$HARNESS/$f" > /dev/null 2>&1 && git checkout -q HEAD -- "$HARNESS/$f"
-  done
+  local n names="" name out model missing=""
+  for n in "$@"; do names="$names $(entry_bench "$n" | sed 's/^new://')"; done
+  # A rerun after a stop keeps benchmarks an earlier pass already wrote (they are rebuilt and checked below).
+  for name in $names; do grep -qxF "$name" "$CW_MEASURE/bench/A.list" 2> /dev/null || missing="$missing $name"; done
+  if [ -z "$missing" ]; then
+    echo "benchmarks$names already written (kept)"
+  else
+    model=$(agent_model "${PHASE7_SELECTION_MODEL:-claude-opus-4.6}")
+    agent_pass "Work on the task described in work/7-author-bench.md. Add these benchmarks to integration-test/bench/:$missing (see their entries in integration-test/optimization-plan.md). Change nothing else." \
+      "$model" proof/7-author-bench.md proof/7-author-bench-session.md || agent_stop
+    guard_target_unchanged proof/7-author-bench.md
+    git checkout -q HEAD -- .github work constraints 2> /dev/null || true
+    local f
+    for f in $HARNESS_FILES; do
+      [ "$f" = bench ] && continue
+      git ls-files --error-unmatch "$HARNESS/$f" > /dev/null 2>&1 && git checkout -q HEAD -- "$HARNESS/$f"
+    done
+  fi
   rm -rf "$CW_MEASURE/bench/A"
   timebox 900 bash "$HARNESS/bench.sh" --build --src "$PWD/base" --out "$CW_MEASURE/bench/A" \
     > proof/7-bench-A.log 2>&1 || { tail -30 proof/7-bench-A.log; echo "ERROR: new benchmarks do not build" >&2; exit 1; }
@@ -127,6 +141,57 @@ scopes_for_changes() {   # → space-separated scopes from scope-map.tsv for the
   echo "$out" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' '
 }
 
+# A gate that fails on the change is run once on the unchanged base and judged by gate_compare.py:
+# tests the base already fails cannot be held against an optimization. The base runs in the same
+# ./src (the change set aside, then put back) so the target's build state is reused; its result is
+# cached for the whole run (same base commit and frozen harness).
+set_aside_change() {   # → ./src at BASE_SHA with the change in a stash
+  local before
+  before=$(git -C src stash list | wc -l)
+  git -C src stash push -q --include-untracked -m "codeweave: change set aside for a base gate" -- . ':(exclude)codeweave-results' \
+    && [ "$(git -C src stash list | wc -l)" -gt "$before" ] \
+    || { echo "ERROR: could not set the change in ./src aside to run a gate on the base" >&2; exit 1; }
+  git -C src checkout -q --detach "$(state_get BASE_SHA)" \
+    || { echo "ERROR: could not check out the base in ./src (the change is in 'git -C src stash list')" >&2; exit 1; }
+}
+put_back_change() {   # BRANCH
+  git -C src reset -q --hard
+  git -C src clean -fdq -e codeweave-results
+  git -C src checkout -q "$1" && git -C src stash pop -q \
+    || { echo "ERROR: could not put the change back in ./src (see 'git -C src stash list'); resolve it, then rerun" >&2; exit 1; }
+}
+gate_vs_base() {   # SCOPE CHANGE_LOG CHANGE_RC BRANCH [BASE_ARTIFACT] → 0 = accepted; one line why on stdout
+  local scope="$1" d="$CW_MEASURE/gates-base" key with base_rc=0
+  key=$(printf '%s' "$scope" | tr -c 'A-Za-z0-9_,.-' '_')
+  with="$(state_get BASE_SHA) $(shasum -a 256 "$CW_MEASURE/manifests/harness.json" 2> /dev/null | cut -c1-16)"
+  mkdir -p "$d"
+  if [ ! -f "$d/$key.rc" ] || [ "$(cat "$d/$key.with" 2> /dev/null)" != "$with" ]; then
+    echo "  $scope failed on the change; running it once on the unchanged base to compare" >&2
+    teardown > /dev/null 2>&1 || true
+    set_aside_change
+    timebox "${TEST_TIMEOUT:-1800}" bash "$HARNESS/test.sh" "$scope" --src "$PWD/src" ${5:+--artifact "$5"} > "$d/$key.log" 2>&1 || base_rc=$?
+    teardown > /dev/null 2>&1 || true
+    put_back_change "$4"
+    rm -f "$d/$key.rc"
+    # A base run that timed out is not kept: a rerun with a longer TEST_TIMEOUT measures it again.
+    [ "$base_rc" -eq 124 ] || { echo "$base_rc" > "$d/$key.rc"; echo "$with" > "$d/$key.with"; }
+    grep -E "^total:" "$d/$key.log" | tail -1 | sed "s/^/  on the base: /" >&2 || true
+  fi
+  [ -f "$d/$key.rc" ] && base_rc=$(cat "$d/$key.rc")
+  "$CW_PY" "$CW_TOOLS/gate_compare.py" --base "$d/$key.log" --base-rc "$base_rc" --change "$2" --change-rc "$3"
+}
+run_gate() {   # SCOPE LOG NOTES BRANCH [B_ARTIFACT] [BASE_ARTIFACT] → 0 = passed, or failed only as the base does
+  local rc=0
+  timebox "${TEST_TIMEOUT:-1800}" bash "$HARNESS/test.sh" "$1" --src "$PWD/src" ${5:+--artifact "$5"} > "$2" 2>&1 || rc=$?
+  [ $rc -eq 0 ] && return 0
+  [ "${DRY_RUN:-false}" = "true" ] && return 1
+  [ $rc -eq 124 ] && { echo "$1: timed out after ${TEST_TIMEOUT:-1800} s (TEST_TIMEOUT)" | tee -a "$3"; return 1; }
+  if gate_vs_base "$1" "$2" "$rc" "$4" "${6:-}" > "$2.vs-base"; then
+    echo "$1: $(cat "$2.vs-base")" | tee -a "$3"; return 0
+  fi
+  echo "$1: $(cat "$2.vs-base")" | tee -a "$3"; return 1
+}
+
 write_failed_verdict() {   # N REASON
   "$CW_PY" - "$REPORTS/ab-comparison-opt$1" "$1" "$2" "$3" <<'EOF'
 import json, sys
@@ -145,7 +210,7 @@ step_cycle() {
   if [ -f "$dir/done" ]; then echo "optimization $n already done: $(cat "$dir/done")"; return; fi
   verify_manifests
   name=$(entry_name "$n"); mpath=$(entry_field "$n" "Measurement path")
-  view=$(entry_field "$n" View); metric=$(entry_field "$n" Metric); bench=$(entry_field "$n" Bench | sed 's/^new://')
+  view=$(entry_field "$n" View); metric=$(entry_field "$n" Metric); bench=$(entry_bench "$n" | sed 's/^new://')
   [ -n "$metric" ] || metric=frame_ms
   if [ -z "$view" ]; then view=$("$CW_PY" -c 'import json,sys; v=json.load(open(sys.argv[1])).get("views",{}); print(sorted(v)[0] if v else "")' "$REPORTS/baseline.json" 2> /dev/null || true); fi
   branch="opt/$n-$name"; base_sha=$(state_get BASE_SHA)
@@ -195,13 +260,15 @@ step_cycle() {
       scopes="$(scopes_for_changes "$all_changed") $(val_field 'Test scopes' | tr ',' ' ')"
       selftests=$(echo "$scopes" | tr ' ' '\n' | grep '^selftest:' | sed 's/^selftest://' | sort -u | tr '\n' ',' | sed 's/,$//')
       scopes=$(echo "$scopes" | tr ' ' '\n' | grep -v '^selftest:' | grep -v '^core$' | grep -v '^$' | sort -u | tr '\n' ',' | sed 's/,$//')
-      timebox "${TEST_TIMEOUT:-1800}" bash "$HARNESS/test.sh" core --src "$PWD/src" > "$dir/gate-core-$iter.log" 2>&1 || failed="$failed core"
+      local notes="$dir/gates-vs-base-$iter.txt"
+      : > "$notes"
+      run_gate core "$dir/gate-core-$iter.log" "$notes" "$branch" || failed="$failed core"
       if [ -n "$scopes" ]; then
-        timebox "${TEST_TIMEOUT:-1800}" bash "$HARNESS/test.sh" "scope:$scopes" --src "$PWD/src" > "$dir/gate-scopes-$iter.log" 2>&1 || failed="$failed scope:$scopes"
+        run_gate "scope:$scopes" "$dir/gate-scopes-$iter.log" "$notes" "$branch" || failed="$failed scope:$scopes"
       fi
       if [ -n "$selftests" ]; then
-        timebox "${TEST_TIMEOUT:-1800}" bash "$HARNESS/test.sh" "selftest:$selftests" --src "$PWD/src" --artifact "$b_app" \
-          > "$dir/gate-selftest-$iter.log" 2>&1 || failed="$failed selftest:$selftests"
+        run_gate "selftest:$selftests" "$dir/gate-selftest-$iter.log" "$notes" "$branch" "$b_app" "$(state_get A_APP)" \
+          || failed="$failed selftest:$selftests"
       fi
       teardown
       echo "gates: core${scopes:+, scope:$scopes}${selftests:+, selftest:$selftests} → ${failed:-all passed}"
@@ -210,6 +277,7 @@ step_cycle() {
         case "$failed" in *" core"*) append_val "Gate failure: core tests (attempt $iter)" "$dir/gate-core-$iter.log" ;; esac
         case "$failed" in *" scope:"*) append_val "Gate failure: $scopes (attempt $iter)" "$dir/gate-scopes-$iter.log" ;; esac
         case "$failed" in *" selftest:"*) append_val "Gate failure: self-test $selftests (attempt $iter)" "$dir/gate-selftest-$iter.log" ;; esac
+        [ -s "$notes" ] && { echo; echo "Compared with the same gates on the unchanged base (failures the base shares are not yours):"; cat "$notes"; } >> "$VAL"
         continue
       fi
       { echo "B_APP=$b_app"; echo "B_CODE=$b_code"; echo "ITER=$iter"; } > "$dir/gated"
@@ -271,6 +339,10 @@ step_cycle() {
   fi
   "$CW_PY" "$CW_TOOLS/ab_frames.py" verdict --primary "$primary" ${guard:+--guard "$guard"} \
     ${caps[@]+"${caps[@]}"} --opt "$n" --out "$REPORTS/ab-comparison-opt$n"
+  if [ -s "$dir/gates-vs-base-$ITER.txt" ]; then
+    { echo; echo "## Correctness gates that fail on the base too"; echo; sed 's/^/- /' "$dir/gates-vs-base-$ITER.txt"; } \
+      >> "$REPORTS/ab-comparison-opt$n.md"
+  fi
   cp "$dir/game.md" "$REPORTS/ab-game-opt$n.md"
   [ -f "$dir/bench.md" ] && cp "$dir/bench.md" "$REPORTS/ab-bench-opt$n.md"
   cp "$dir/visual.md" "$REPORTS/visual-opt$n.md"

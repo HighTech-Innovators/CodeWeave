@@ -110,6 +110,8 @@ Using the scores recorded in `agent-state/quality-review.md` (do not re-assess â
 | Downstream Usability | 8+ |
 | Publication Readiness | 8+ |
 
+The targets mean what the Score Guidance in `work/1-generate-book.md` says. Do not add conditions of your own to them, in the verdict or in Required Actions (for example, that a score may only rise after a re-read finds no errors).
+
 FAIL if: any recorded score is below its target.
 FAIL if: any category has no recorded score (treat as 0).
 FAIL if: all 16 scores land exactly at their respective target floors with none above â€” this indicates minimally compliant scoring rather than genuine assessment. In this case record "SUSPICIOUS SCORING" and FAIL.
