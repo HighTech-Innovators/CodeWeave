@@ -13,7 +13,7 @@ scripts they call to confirm arguments, environment variables and output files e
 | 1 | Contract check | `smoke-test-report.md` says FAIL or is missing |
 | 2 | build.sh | wrong command; artefact path not the last stdout line; self-containment issue from the design not handled |
 | 3 | test.sh | a contract scope missing; zero tests not treated as failure; self-tests not run against `--artifact`; scope names differ from the target's |
-| 4 | run.sh | measuring tools or scenario taken from `$CW_SRC` instead of `$CW_BASE`; another build not actually played; `metrics.json` fields differ from the contract; noise not read from the noise files; screenshots not copied while the rendered-output check is on; window size not reported; failed launch exits 0 |
+| 4 | run.sh | measuring tools or scenario taken from `$CW_SRC` instead of `$CW_BASE`; another build not actually played; `metrics.json` fields differ from the contract; noise not read from the noise files; screenshots not copied while the rendered-output check is on; window size not reported; failed launch exits 0; a loading view of the design missing, its "ready" not read from the application's state, its measures not positive lower-is-better numbers, or no `pending` when it timed out |
 | 5 | run.sh --profile | missing or not writing `profile.md` |
 | 6 | bench.sh / bench/ | sources copied instead of compiled from `--src`; no fresh process per run; no fingerprint of the result; candidates from the design missing; the shipped build's runtime ignored without reason |
 | 7 | quiet.sh | `--check` has side effects (closes programs, takes locks, waits); `CMD` mode does not take the target's lock exclusively or lets nested tools retake it |

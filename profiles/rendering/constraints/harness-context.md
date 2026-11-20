@@ -15,8 +15,27 @@ claim about the target in its own code, book and ADRs.
   most N per frame") and memory bandwidth.
 - **Hitches**: garbage collection or heap churn (allocations in per-frame paths),
   synchronous loading or generation, mesh rebuilds, physics mesh baking, shader
-  compilation on first use. Medians hide hitches; the per-launch median is still the
-  decision metric — note hitch-prone changes separately.
+  compilation on first use. Medians hide hitches: a loading view can report a high
+  percentile (e.g. `frame_p99_ms`) as a measure of its own; otherwise note hitch-prone
+  changes separately.
+
+## Where loading time goes
+
+When content reaches full detail late (pop-in, coarse terrain or blurry textures that
+swap as the player moves), the time between "needed" and "shown" is spent in:
+
+- **Deciding and ordering**: which pieces are requested, in which order (nearest and in
+  view first, or in scan order), how often the request list is rebuilt, and work
+  requested and then thrown away when the player moves on.
+- **Producing**: generating or reading the data, building meshes, collision and
+  lower detail levels; often on worker threads, sometimes needlessly serial or repeated.
+- **Handing over**: per-frame budgets ("apply at most N per frame", time slices) that
+  leave the frame idle while work waits, main-thread steps between finished work and
+  the GPU (mesh and texture uploads, material set-up, collider baking).
+- **Waiting on something else**: a single queue shared with other work, locks, disk.
+
+A faster path brings the same final detail sooner. Showing less detail, shrinking a
+detail range or skipping content is a picture change, not a loading optimization.
 
 ## Typical optimization targets
 

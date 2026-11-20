@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stub harness (tests only): one fake launch. Frame time ~5 ms with 3% noise; a
-# build whose sources contain "codeweave-dry-run" is 10% faster on "landing".
+# build whose sources contain "codeweave-dry-run" is 10% faster on "landing" and loads
+# 20% faster in the loading view "arrive" (ready_ms).
 set -euo pipefail
 ART="" OUT="" PROFILE=0
 while [ $# -gt 0 ]; do
@@ -24,10 +25,12 @@ import numpy as np
 from PIL import Image
 out, fast, window = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
 views = {}
-for i, v in enumerate(("landing", "shore")):
+for i, v in enumerate(("landing", "shore", "arrive")):
     base = (5.0 + i) * (0.9 if (fast and v == "landing") else 1.0)
     f = base * random.lognormvariate(0, 0.03)
     views[v] = {"frame_ms": f, "cpu_ms": f * 0.6, "gpu_ms": f * 1.3, "pending": 0}
+    if v == "arrive":
+        views[v]["ready_ms"] = 2000 * (0.8 if fast else 1.0) * random.lognormvariate(0, 0.03)
     img = np.full((90, 160, 3), 100 + 40 * i, dtype=np.uint8)
     img.reshape(-1, 3)[np.random.default_rng().integers(0, 90 * 160, 10)] = 0
     Image.fromarray(img).save(f"{out}/screens/{v}.png")

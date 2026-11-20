@@ -4,7 +4,8 @@
 
 Write the report for the project's owner, who decides what to merge. Plain language;
 numbers with their uncertainty; frame times in ms and the matching fps where useful
-(fps = 1000 / ms).
+(fps = 1000 / ms); loading measures (e.g. `ready_ms`) in seconds where that reads
+better, with what they measure in words.
 
 Read `constraints/project.md` first: under **This project** it may state the owner's
 goals (e.g. what matters most, what needs their approval). Relate the results to them.

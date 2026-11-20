@@ -32,15 +32,36 @@ entry_name()  { grep -m1 "^## Optimization $1:" "$PLAN" | sed 's/^## Optimizatio
 entry_bench() { entry_field "$1" Bench | awk '{print $1}'; }
 val_field()   { grep -m1 "^- \*\*$1\*\*:" "$VAL" 2> /dev/null | sed 's/^[^:]*: *//; s/[[:space:]]*$//; s/`//g'; }
 
+# judged_metric VIEW METRIC — can METRIC of VIEW decide a verdict? Any metric the baseline
+# judged for that view (frame_ms, cpu_ms and the harness's own measures, e.g. a loading
+# view's ready_ms; never gpu_ms). Prints why not on stdout and returns 1.
+judged_metric() {
+  local base="$REPORTS/baseline.json"
+  if [ -f "$base" ]; then
+    local out
+    out=$("$CW_PY" "$CW_TOOLS/ab_frames.py" metrics --baseline "$base" --view "$1" --metric "$2" 2>&1) && return 0
+    echo "$out" | tail -1
+    return 1
+  fi
+  case "$2" in
+    gpu_ms|pending) echo "Metric $2 is never judged"; return 1 ;;
+    [a-z]*) case "$2" in *[!a-z0-9_]*) echo "Metric '$2' is not a metric name"; return 1 ;; esac ;;
+    *) echo "Metric '$2' is not a metric name"; return 1 ;;
+  esac
+}
+
 validate_plan() {
-  local n path view metric bench problems=""
+  local n path view metric bench why problems=""
   for n in $(seq "$FIRST" "$LAST"); do
     grep -q "^## Optimization $n:" "$PLAN" || { problems="$problems; entry $n missing"; continue; }
     path=$(entry_field "$n" "Measurement path")
     view=$(entry_field "$n" "View"); metric=$(entry_field "$n" "Metric"); bench=$(entry_bench "$n")
     case "$path" in
-      game-frame) [ -n "$view" ] && { [ "$metric" = frame_ms ] || [ "$metric" = cpu_ms ]; } \
-                    || problems="$problems; entry $n: game-frame needs View and Metric (frame_ms|cpu_ms)" ;;
+      game-frame) if [ -z "$view" ] || [ -z "$metric" ]; then
+                    problems="$problems; entry $n: game-frame needs View and Metric"
+                  elif ! why=$(judged_metric "$view" "$metric"); then
+                    problems="$problems; entry $n: $why"
+                  fi ;;
       core-bench) case "${bench#new:}" in
                     ''|*[!A-Za-z0-9_-]*) problems="$problems; entry $n: core-bench needs Bench: a benchmark name or new:name (got '$bench')" ;;
                   esac ;;
@@ -67,8 +88,8 @@ step_select() {
     { echo "# Optimization plan (dry-run stub)"; echo
       for n in $(seq "$FIRST" "$LAST"); do
         if [ $((n % 2)) -eq 1 ]; then
-          printf '## Optimization %s: dry-run-%s\n\n- **Measurement path**: game-frame\n- **View**: %s\n- **Metric**: frame_ms\n\n' \
-            "$n" "$n" "${DRY_RUN_VIEW:-landing}"
+          printf '## Optimization %s: dry-run-%s\n\n- **Measurement path**: game-frame\n- **View**: %s\n- **Metric**: %s\n\n' \
+            "$n" "$n" "${DRY_RUN_VIEW:-landing}" "${DRY_RUN_METRIC:-frame_ms}"
         else
           printf '## Optimization %s: dry-run-%s\n\n- **Measurement path**: core-bench\n- **View**: %s\n- **Metric**: frame_ms\n- **Bench**: %s\n\n' \
             "$n" "$n" "${DRY_RUN_VIEW:-landing}" "$(head -1 "$CW_MEASURE/bench/A.list" 2> /dev/null || echo water)"

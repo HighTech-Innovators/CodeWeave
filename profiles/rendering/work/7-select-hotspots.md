@@ -17,7 +17,7 @@ Read first:
   work — do not pick it, or measure it with a benchmark instead.
 - `integration-test/reports/profiler-summary.md` — where frame time goes, per view: which
   views are GPU-bound (GPU time above CPU time) and which are CPU-bound, and what each
-  part of the picture costs.
+  part of the picture costs; for loading views, where the loading time goes.
 - `integration-test/SOURCE-UNDER-INVESTIGATION.md` §7 (benchmarks), §9 (rules), §10
   (candidates); `book/_generated/performance-map.md`; the relevant ADRs and source files.
 - `.github/profile/integrity-patterns.tsv` — which files the pipeline restores
@@ -37,17 +37,29 @@ Look on both sides of the frame:
   (render-command setup, mesh or buffer uploads, per-frame material changes, GPU
   read-backs). With the rendered-output check on, the pipeline compares B's screenshots
   with A's: anything beyond the A-vs-A noise caps the verdict at INVESTIGATE.
+- **Loading side**, when the harness has loading views (views in baseline.md with
+  measures of their own, e.g. `ready_ms`): what delays content reaching full detail —
+  the order work is queued in (nearest and in view first), work done on one thread that
+  could run on idle workers, per-frame budgets that leave time unused, generation,
+  meshing and texture or material set-up, synchronous uploads, work repeated or thrown
+  away and redone. A change that makes loading faster must not cost frame time or add
+  hitches: every optimization is checked for a regression in every judged measure of
+  every view.
 
 Choose:
 
-- **Measurement path** per entry: `game-frame` (frames of the running application) when
-  the change should show in a view's frame or main-thread CPU time; `core-bench` when it
-  is in engine-free code and a benchmark isolates it (the application is then measured
-  too, as a regression guard).
+- **Measurement path** per entry: `game-frame` (measured in the running application)
+  when the change should show in a view's frame or main-thread CPU time, or in a loading
+  view's own measure; `core-bench` when it is in engine-free code and a benchmark
+  isolates it (the application is then measured too, as a regression guard).
 - **View and metric**: `cpu_ms` when the change removes main-thread work; `frame_ms` for
   a render-side change, in a view the GPU (or render thread) limits — a GPU saving shows
-  as frame time there. GPU time itself is reported but never the judged metric: GPU
-  timers are unreliable on some platforms.
+  as frame time there; a loading view's measure (e.g. `ready_ms`) for a change that
+  makes loading faster. Any metric baseline.md lists for that view can be judged. GPU
+  time itself is reported but never the judged metric: GPU timers are unreliable on
+  some platforms.
+- **Spread over the project's goals**: when it states several (e.g. frame rate and
+  loading), plan entries for each, in proportion to their weight.
 - Keep behaviour and output identical and change nothing visible; respect every rule in
   §9. Spread the entries over different subsystems.
 - A benchmark may be an existing one (from `bench.sh --list`, see baseline.md) or a new

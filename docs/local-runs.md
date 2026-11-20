@@ -135,9 +135,9 @@ and the prompts repeat it. Say it explicitly when you mean to overrule a profile
 ("ignore the profile's advice on X; instead …"); an agent can then not miss it.
 
 **What text cannot change.** Rules the pipeline enforces in code are not instructions
-to an agent, so no constraint file loosens them: the plan's allowed metrics (frame and
-CPU time, never GPU time), the frozen harness and benchmarks, the statistics, the gates
-and the rendered-output check. A project that wants a different judgement changes a
+to an agent, so no constraint file loosens them: the plan's allowed metrics (those the
+A/A baseline judged for a view — never GPU time), the frozen harness and benchmarks, the
+statistics, the gates and the rendered-output check. A project that wants a different judgement changes a
 *setting* instead, visibly: `target.env` (e.g. `MEASURE_PAIRS`, `VISUAL_CHECK`) or
 `integrity-patterns.tsv`.
 
@@ -148,6 +148,17 @@ other, and Phase 7 caps a KEEP at INVESTIGATE when B's picture differs from A's 
 more than that. With the check on, Phase 6 stops if the base build gives no screenshots
 (so a harness that forgot them cannot pass silently). Set `VISUAL_CHECK=off` in
 `target.env` for a project without a picture to compare.
+
+**Loading goals.** When the project's goals ask for faster loading (terrain or detail that
+appears late, pop-in, streaming), the harness adds **loading views**: a scripted arrival
+or move, started the same way in every launch, that reports its own measures next to the
+frame times, e.g. `ready_ms` (until everything in range is at full detail) and
+`frame_p99_ms` (the bad frames meanwhile). "Ready" is read from the application's own
+state, and the screenshot is taken then. Every measure a view reports is judged like
+frame time — A/A noise and MDE in Phase 6, usable as an optimization's metric, and
+checked for regressions in every optimization — except GPU time, which is only reported.
+So a faster-loading change that costs frame rate, or a frame-rate change that slows
+loading, is caught. See [the harness contract](harness-contract.md).
 
 **Integrity patterns.** `integrity-patterns.tsv` lines are `kind<TAB>pattern`, added to
 the profile's: `protected` (path; the agent's edits are undone), `tuning` (path; allowed,

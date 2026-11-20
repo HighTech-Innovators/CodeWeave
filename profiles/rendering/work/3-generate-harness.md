@@ -42,12 +42,22 @@ Use exactly these numbered sections:
    how a screenshot of each view is taken (the rendered-output check needs one per view
    when it is on — your instruction says whether it is), output files and their format, how noise is detected (which files), the machine lock
    and health check, typical duration per launch, anything wiped between launches.
+   **Loading views**, when the project's goals ask for faster loading (see
+   `constraints/harness.md`): the event each one plays (an arrival or a fixed move), how
+   it is started the same way in every launch, which caches are emptied or kept, what
+   "ready" means in the application's own state and where the measuring code reads it,
+   the measures it reports (e.g. `ready_ms`, `frame_p99_ms`), its time limit, and when
+   its screenshot is taken. If the target's tooling has no such scenario, specify the
+   smallest measurement-only addition in §5. Write "none: the goals do not ask for it"
+   otherwise.
 5. **Capture length and base patches** — is the per-view capture long enough for
    effects of a few percent? If not, specify a measurement-only change (e.g. a launch
    argument for the number of frames, defaulting to today's value): file, exact edit,
-   why it cannot change the application's behaviour. Write "none needed" otherwise.
+   why it cannot change the application's behaviour. The same for a loading view the
+   target's tooling cannot play or time yet (e.g. a self-test step that jumps to a spot
+   and reports when everything in range is at full detail). Write "none needed" otherwise.
 6. **Profiling** — how one diagnostic launch shows where frame time goes (per view, per
-   subsystem/part).
+   subsystem/part), and for loading views where the loading time goes.
 7. **Benchmarks** — the engine-free code (module or assembly) and how it compiles outside
    the engine (existing test projects), existing probes/benchmarks, how to run on the
    shipped build's runtime if it differs from development, and **3–6 benchmark candidates** for
@@ -61,8 +71,10 @@ Use exactly these numbered sections:
    approval, engine-free core, deterministic generation, tuning data location), and
    files that must never be edited.
 10. **Performance candidates** — the 6–10 most promising hotspots from the book and
-    ADRs, each with source location, why it costs time, which view or benchmark would
-    show it (`game-frame` vs `core-bench`), and the risk to behaviour.
+    ADRs, each with source location, why it costs time, which view and metric or
+    benchmark would show it (`game-frame` vs `core-bench`), and the risk to behaviour.
+    Cover every goal the project states: with a loading goal, include candidates that
+    make loading faster (what loads first, generation, meshing, uploads, scheduling).
 
 ## 2. `integration-test/AGENTS.md`
 

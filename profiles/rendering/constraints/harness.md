@@ -23,6 +23,27 @@ target's scripts, which manage that.
   per view the median frame, main-thread CPU and GPU milliseconds. Choose views that
   are fixed and repeatable (pinned camera, time of day, seed, weather); report work
   still loading as `pending`.
+- **Loading views** — when the project's goals ask for faster loading (content, terrain
+  or detail that appears late, pop-in, streaming, time until a place is ready): add one
+  or more views that measure it, next to the steady views. A loading view is a scripted,
+  repeatable event — an arrival at a place not yet loaded, or a move along a fixed path
+  at a fixed speed — that reports, besides its frame times, how long the loading takes,
+  e.g. `ready_ms` (from the arrival or the start of the move until everything within
+  the detail range is shown at full detail with its final textures and materials) and
+  how bad the frames are meanwhile, e.g. `frame_p99_ms`. Rules:
+  - **Ready means ready**: take "ready" from the application's own state (every piece
+    in range at its final detail level, nothing queued or in flight), never from a
+    fixed wait. The measuring code that decides it comes from `$CW_BASE`.
+  - **Same start every launch**: same world, seed, save and spot; the application's
+    caches of generated or loaded content (on disk and in memory) empty or filled the
+    same way in every launch — say which, and keep it so for A and B.
+  - **Time limit**: a launch that does not get ready within a stated limit reports
+    `pending` > 0 (the pipeline repeats it).
+  - **Screenshot when ready**: with the rendered-output check on, take the loading
+    view's screenshot once it reports ready, so a build that reports ready too early
+    shows as a visible change.
+  - Report each measure as a positive number where lower is better (milliseconds);
+    the pipeline judges every one of them except `gpu_ms`.
 - **Window size**: launch in `APP_WINDOW` (e.g. 1600×900) windowed, never full screen,
   and report the actual size in `window`.
 - **Same measuring code for A and B**: the scenario, camera spots, timings and the
@@ -39,7 +60,7 @@ target's scripts, which manage that.
 - **Results folders**: copy the launch's raw output into `--out` immediately; the
   target may wipe its own results folder on the next launch.
 - **GPU timings** may be unreliable on some platforms; report them, but the pipeline
-  decides on frame and CPU time only.
+  never decides on GPU time (frame and CPU time, and a loading view's own measures).
 - **Capture length**: a view measured over only a few frames (well under a second) is
   too noisy for small effects. If the measuring code allows no longer capture, propose
   a measurement-only change as `integration-test/base-patches/*.patch` (e.g. a launch
@@ -47,7 +68,8 @@ target's scripts, which manage that.
   and B alike and shown to the user before use.
 - **Profiling** (`run.sh --profile`): one diagnostic launch that shows where frame time
   goes, using the target's own tools where they exist (e.g. a perf run that switches
-  parts of the picture off one at a time).
+  parts of the picture off one at a time); for loading views also where the loading
+  time goes (waiting in a queue, generating, meshing, uploading, on which threads).
 - **Quiet machine**: `quiet.sh CMD` must take the target's machine lock (if any) in its
   exclusive mode and make nested target tools skip taking it again; `quiet.sh --check`
   only runs the target's health check — no closing programs, no waiting.

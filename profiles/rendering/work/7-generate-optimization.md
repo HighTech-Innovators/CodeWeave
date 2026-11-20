@@ -17,6 +17,9 @@ engine and, under **This project** at its end, the project's own (they win where
   drawn: a visible difference caps the verdict at INVESTIGATE and needs the owner's
   approval. A render-side change skips only work whose result cannot be seen; every
   pixel stays as it was.
+- **Loading changes bring the same detail sooner**: never lower a detail level, shrink a
+  detail or view range, or skip content to get "ready" faster, and never change what
+  the measuring code counts as ready.
 - **Respect the target's invariants** (`integration-test/SOURCE-UNDER-INVESTIGATION.md` §9,
   its ADRs and docs): e.g. engine-free code stays engine-free, tuning values stay in the
   tuning data, seeded randomness stays seeded.

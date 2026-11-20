@@ -7,7 +7,9 @@ pairs (ABBA). Compared with integration-test/_tools/ab_compare.py (the
 GitHub Actions / PyTorch path) it adds:
 
 - per-view, per-metric data (game launches report several views, each with
-  frame / CPU / GPU milliseconds);
+  frame / CPU / GPU milliseconds, and any further measures the harness reports for
+  a view, e.g. a loading view's time until full detail; every measure is a positive
+  number where lower is better);
 - a paired test on log(B/A) over adjacent A/B pairs, which removes slow drift
   (heat, background) that an unpaired test would count as noise;
 - a minimum detectable effect (MDE) from the actual degrees of freedom, pooled
@@ -22,6 +24,8 @@ measurement_path, p_value_e2e, micro_detail.micro_p_value), so
 Modes:
   baseline  --game RECORDS [--bench RECORDS ...] --out baseline.json
   compare   --records RECORDS --view V --metric M [--baseline B] --out PREFIX
+  metrics   --baseline B [--view V --metric M]   list the judged metrics per view;
+            with --view/--metric exit 1 unless that one is judged in the baseline
   bench     --records RECORDS [--baseline B] --out PREFIX
   verdict   --primary P.json [--guard G.json] [--cap NAME ...] --out PREFIX
 """
@@ -37,7 +41,14 @@ from scipy import stats
 ALPHA = 0.05
 POWER = 0.80
 MIN_PAIRS = 3
-GUARD_METRICS = ("frame_ms", "cpu_ms")     # gpu_ms is reported, never decides
+FRAME_METRICS = ("frame_ms", "cpu_ms", "gpu_ms")
+REPORT_ONLY = ("gpu_ms",)      # reported, never decides: GPU timers are unreliable on some platforms
+NOT_METRICS = ("pending",)     # work still loading: a launch with any is repeated by measure.py
+
+
+def judged(metric):
+    """May this metric decide a verdict and guard against regressions?"""
+    return metric not in REPORT_ONLY and metric not in NOT_METRICS
 
 
 # --------------------------------------------------------------------------- io
@@ -94,6 +105,17 @@ def views_in(block):
     for l in valid_launches(block):
         names.update(((l.get("metrics") or {}).get("views") or {}).keys())
     return sorted(names)
+
+
+def metrics_in(block, view):
+    """Every metric reported for VIEW in the block: the frame metrics first, then the rest by name."""
+    names = set()
+    for l in valid_launches(block):
+        v = (((l.get("metrics") or {}).get("views") or {}).get(view) or {})
+        names.update(k for k, x in v.items() if k not in NOT_METRICS
+                     and isinstance(x, (int, float)) and not isinstance(x, bool))
+    return sorted(names, key=lambda m: (FRAME_METRICS.index(m) if m in FRAME_METRICS
+                                        else len(FRAME_METRICS), m))
 
 
 # -------------------------------------------------------------------- statistics
@@ -167,7 +189,7 @@ def mode_baseline(args):
         out["game_block"] = {"complete": block.get("complete"), "discards": block.get("discards")}
         for view in views_in(block):
             out["views"][view] = {}
-            for metric in ("frame_ms", "cpu_ms", "gpu_ms"):
+            for metric in metrics_in(block, view):
                 fn = lambda l, v=view, m=metric: game_value(l, v, m)
                 allv = side_values(block, fn, "A") + side_values(block, fn, "B")
                 prs = pairs_of(block, fn)
@@ -178,7 +200,7 @@ def mode_baseline(args):
                          "cv": sd(allv) / mean(allv) if mean(allv) else None,
                          "n_pairs": len(d), "pair_logratio_sd": sd(d) if len(d) >= 2 else None}
                 out["views"][view][metric] = entry
-                if metric in GUARD_METRICS and len(prs) >= MIN_PAIRS:
+                if judged(metric) and len(prs) >= MIN_PAIRS:
                     r = paired(prs)
                     out["aa_check"].append({"view": view, "metric": metric,
                                             "delta_pct": r["delta_pct"], "p_value": r["p_value"],
@@ -202,7 +224,8 @@ def mode_baseline(args):
     md = ["# Baseline (A/A)\n",
           "Two builds of the same code, measured with the full A/B protocol. Any "
           "difference here is noise; the MDE is the smallest change a 6-pair A/B "
-          "can reliably detect.\n",
+          "can reliably detect. Every metric is lower-is-better; these are the ones "
+          "that can be judged (GPU time is reported, never judged).\n",
           "| View | Metric | Mean | CV | A/A Δ% | p | MDE % | Significant |",
           "|---|---|---:|---:|---:|---:|---:|---|"]
     for c in out["aa_check"]:
@@ -231,7 +254,22 @@ def noise_for(baseline, view=None, metric=None, bench=None):
     return ((baseline.get("views") or {}).get(view) or {}).get(metric)
 
 
+def mode_metrics(args):
+    baseline = load(args.baseline)
+    views = {v: [m for m in ms if judged(m)] for v, ms in (baseline.get("views") or {}).items()}
+    if args.view or args.metric:
+        if args.metric in views.get(args.view, []):
+            return
+        why = (f"{args.metric} is reported but never judged" if args.metric in REPORT_ONLY
+               else f"view {args.view!r} has no judged metric {args.metric!r} in the baseline")
+        sys.exit(f"{why}; judged: " + "; ".join(f"{v}: {', '.join(ms)}" for v, ms in sorted(views.items())))
+    for v, ms in sorted(views.items()):
+        print(f"{v}: {' '.join(ms)}")
+
+
 def mode_compare(args):
+    if not judged(args.metric):
+        sys.exit(f"--metric {args.metric}: reported only, never the judged metric")
     block = load(args.records)
     baseline = load(args.baseline) if args.baseline else None
     result = {"schema": "local-v1", "kind": "game", "measurement_path": "end-to-end",
@@ -249,8 +287,8 @@ def mode_compare(args):
 
     guards = []
     for view in views_in(block):
-        for metric in GUARD_METRICS:
-            if (view, metric) == (args.view, args.metric):
+        for metric in metrics_in(block, view):
+            if not judged(metric) or (view, metric) == (args.view, args.metric):
                 continue
             r = paired(pairs_of(block, lambda l, v=view, m=metric: game_value(l, v, m)),
                        noise_for(baseline, view, metric))
@@ -390,9 +428,13 @@ def main():
     c = sub.add_parser("compare")
     c.add_argument("--records", required=True)
     c.add_argument("--view", required=True)
-    c.add_argument("--metric", required=True, choices=list(GUARD_METRICS))
+    c.add_argument("--metric", required=True)
     c.add_argument("--baseline")
     c.add_argument("--out", required=True)
+    j = sub.add_parser("metrics")
+    j.add_argument("--baseline", required=True)
+    j.add_argument("--view")
+    j.add_argument("--metric")
     m = sub.add_parser("bench")
     m.add_argument("--records", required=True)
     m.add_argument("--baseline")
@@ -404,7 +446,7 @@ def main():
     v.add_argument("--opt", required=True)
     v.add_argument("--out", required=True)
     args = ap.parse_args()
-    {"baseline": mode_baseline, "compare": mode_compare,
+    {"baseline": mode_baseline, "compare": mode_compare, "metrics": mode_metrics,
      "bench": mode_bench, "verdict": mode_verdict}[args.mode](args)
 
 

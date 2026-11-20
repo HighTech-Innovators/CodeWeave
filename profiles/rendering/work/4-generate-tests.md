@@ -32,7 +32,9 @@ Rules:
 - `run.sh` copies the launch's raw output — and, with the rendered-output check on, one
   screenshot per view (`screens`) — into `--out` straight away,
   reads the noise files itself, fills `metrics.json` exactly as the contract shows, and
-  exits non-zero for a failed launch. Check the reported window size.
+  exits non-zero for a failed launch. Check the reported window size. Loading views
+  from the design report their own measures (e.g. `ready_ms`) as positive numbers,
+  lower is better, and `pending` > 0 when they did not get ready in time.
 - `build.sh` prints only the artefact path as its last stdout line; make the artefact
   self-contained (see section 2).
 - `test.sh` exits non-zero when a requested scope ran zero tests; `test.sh list` prints

@@ -24,10 +24,11 @@ def run(*args, ok=(0,)):
 
 
 def game_block(pairs, effect=0.0, noise=0.03, drift=0.0, other_effect=0.0, seed=1,
-               complete=True, views=("landing", "shore")):
+               complete=True, views=("landing", "shore"), loading=None):
     """ABBA-ordered launches. effect = fractional speed-up of B on views[0];
     other_effect = fractional slow-down of B on views[1]; drift = fractional
-    increase per launch (heat), shared by both sides."""
+    increase per launch (heat), shared by both sides. loading = a loading view
+    "arrive" with its own measures (ready_ms, frame_p99_ms), B faster by that fraction."""
     rnd = random.Random(seed)
     launches, k = [], 0
     for pair in range(1, pairs + 1):
@@ -44,6 +45,13 @@ def game_block(pairs, effect=0.0, noise=0.03, drift=0.0, other_effect=0.0, seed=
                     f *= 1 + other_effect
                 frame = base * f * heat * math.exp(rnd.gauss(0, noise))
                 vs[v] = {"frame_ms": frame, "cpu_ms": frame * 0.6, "gpu_ms": frame * 1.4, "pending": 0}
+            if loading is not None:
+                f = (1 - loading) if side == "B" else 1.0
+                frame = 9.0 * heat * math.exp(rnd.gauss(0, noise))
+                vs["arrive"] = {"frame_ms": frame, "cpu_ms": frame * 0.8, "gpu_ms": frame * 0.9,
+                                "ready_ms": 2000 * f * heat * math.exp(rnd.gauss(0, noise)),
+                                "frame_p99_ms": 30 * heat * math.exp(rnd.gauss(0, noise)),
+                                "pending": 0}
             launches.append({"seq": k, "side": side, "role": "pair", "pair": pair,
                              "discarded": False, "metrics": {"views": vs, "noise": {"quiet": True}}})
     return {"name": "t", "kind": "game", "complete": complete,
@@ -114,6 +122,43 @@ class AbFramesTest(unittest.TestCase):
         r = self.compare(game_block(6, effect=0.10), baseline=self.tmp / "baseline.json")
         self.assertEqual(r["primary"]["df"], 10)
         self.assertEqual(r["decision"], "KEEP")
+
+    def test_loading_measure_is_judged(self):
+        aa = self.tmp / "aa.json"
+        aa.write_text(json.dumps(game_block(6, seed=7, loading=0.0)))
+        run(TOOLS / "ab_frames.py", "baseline", "--game", aa, "--out", self.tmp / "baseline.json")
+        b = json.loads((self.tmp / "baseline.json").read_text())
+        self.assertEqual(list(b["views"]["arrive"]), ["frame_ms", "cpu_ms", "gpu_ms", "frame_p99_ms", "ready_ms"])
+        checked = {(c["view"], c["metric"]) for c in b["aa_check"]}
+        self.assertIn(("arrive", "ready_ms"), checked)
+        self.assertNotIn(("arrive", "gpu_ms"), checked)
+        self.assertIn("ready_ms", (self.tmp / "baseline.md").read_text())
+        r = self.compare(game_block(6, loading=0.20), view="arrive", metric="ready_ms",
+                         baseline=self.tmp / "baseline.json")
+        self.assertEqual((r["decision"], r["decision_signal"]), ("KEEP", "e2e"), r)
+        self.assertGreater(r["delta_e2e_pct"], 15)
+
+    def test_slower_loading_reverts_a_frame_speedup(self):
+        r = self.compare(game_block(6, effect=0.10, noise=0.01, loading=-0.30))
+        self.assertEqual((r["decision"], r["decision_signal"]), ("REVERT", "regression-elsewhere"), r)
+        self.assertTrue(any(g["regression"] and (g["view"], g["metric"]) == ("arrive", "ready_ms")
+                            for g in r["guards"]), r["guards"])
+        self.assertFalse(any(g["metric"] == "gpu_ms" for g in r["guards"]))
+
+    def test_gpu_time_is_never_judged(self):
+        rec = self.tmp / "rec.json"
+        rec.write_text(json.dumps(game_block(6, effect=0.10)))
+        r = run(TOOLS / "ab_frames.py", "compare", "--records", rec, "--view", "landing",
+                "--metric", "gpu_ms", "--out", self.tmp / "cmp", ok=(1,))
+        self.assertIn("never the judged metric", r.stderr)
+        aa = self.tmp / "aa.json"
+        aa.write_text(json.dumps(game_block(6, seed=7, loading=0.0)))
+        run(TOOLS / "ab_frames.py", "baseline", "--game", aa, "--out", self.tmp / "baseline.json")
+        m = [TOOLS / "ab_frames.py", "metrics", "--baseline", self.tmp / "baseline.json"]
+        self.assertIn("arrive: frame_ms cpu_ms frame_p99_ms ready_ms", run(*m).stdout)
+        run(*m, "--view", "arrive", "--metric", "ready_ms")
+        self.assertIn("never judged", run(*m, "--view", "arrive", "--metric", "gpu_ms", ok=(1,)).stderr)
+        self.assertIn("no judged metric", run(*m, "--view", "landing", "--metric", "ready_ms", ok=(1,)).stderr)
 
     def test_bench_fingerprint_mismatch(self):
         rec = self.tmp / "bench.json"

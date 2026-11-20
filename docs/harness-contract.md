@@ -64,6 +64,22 @@ One measurement launch of the given build. Write `DIR/metrics.json`:
 - `views`: one entry per measured view (a fixed camera position/scene), each the
   median over the launch of frame, CPU (main thread) and GPU milliseconds; `pending`
   = work still loading in that view (non-zero makes the launch be repeated).
+- A view may report further measures of its own, each a positive number where lower is
+  better (milliseconds), e.g. a **loading view** — a scripted arrival or move, started
+  from the same state in every launch — reporting how long it takes until everything in
+  range is shown at full detail:
+
+  ```json
+  "arrive-north": {"frame_ms": 9.1, "cpu_ms": 7.4, "gpu_ms": 8.0,
+                   "ready_ms": 2140, "frame_p99_ms": 31.5, "pending": 0}
+  ```
+
+  Every measure except `gpu_ms` is judged like frame time: Phase 6 measures its A/A
+  noise and MDE, Phase 7 can name it as an optimization's metric, and every
+  optimization is checked for a regression in it. A loading view that never gets
+  ready within its time limit reports `pending` > 0. Its screenshot is taken once it
+  reports ready, so a build that reports ready before the detail is there shows as a
+  visible change.
 - `noise.quiet`: false when the target's own noise detection saw other load during the
   launch; list the reasons.
 - `screens`: screenshot per view, relative to `DIR`, copied into `DIR`. Required when the
@@ -74,7 +90,8 @@ One measurement launch of the given build. Write `DIR/metrics.json`:
 - Exit non-zero if the launch failed; then `metrics.json` may be absent.
 - `--profile`: one diagnostic launch instead; write `DIR/profile.md` — a readable
   breakdown of where frame time goes (per view, per subsystem where the target can
-  tell). Used once, to pick optimizations.
+  tell), and for loading views where the loading time goes. Used once, to pick
+  optimizations.
 
 The launch must measure exactly the same way for any artefact: take the scenario,
 camera positions, timings and measuring code from `CW_BASE`, never from `CW_SRC`.
