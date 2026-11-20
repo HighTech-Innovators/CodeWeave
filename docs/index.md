@@ -102,7 +102,8 @@ The pipeline runs two ways:
   GitHub needed). Phases 1–2 use the same step scripts as the workflows
   (`.github/scripts/phase-{1,2}.sh`); Phases 3–8 run locally only, through the
   [harness contract](harness-contract.md) and trusted measurement tools, with project-type
-  prompts per profile (Unity so far). See [Local runs](local-runs.md).
+  prompts per profile: `rendering` (games, engines, renderers, visualisations) and
+  `unity` on top of it. See [Local runs](local-runs.md).
 
 All target-side output goes to one folder in the target, `codeweave-results/`; see
 [Phase 2](phase-2-adr-generation.md).
@@ -154,7 +155,12 @@ These are not repeated in the per-phase pages.
   `work/N-validate-*.md`, etc.). They are generic; all target-specific facts live in
   the constraint files or generated artifacts.
 - **`constraints/project.md`** — repository-specific hard constraints, passed to
-  every generative phase (1–4).
+  every generative phase. Generated at the start of every job by
+  `.github/scripts/assemble-constraints.sh`: the profile's rules
+  (`profiles/<CODEWEAVE_PROFILE>/constraints/`, `pytorch` here) with the repository's
+  own from `project/constraints/` added under "This project" (they win where the two
+  differ). The same holds for the two optional files below. See
+  [Profile and project rules](local-runs.md#profile-and-project-rules).
 - **`constraints/harness.md`** *(optional)* — target execution constraints
   (hardware, scope, time budgets, isolation). Consumed by Phase 3. May also pin the
   target's toolchain (test runner, venv layout, smoke-check commands, profiler

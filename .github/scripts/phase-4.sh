@@ -5,7 +5,7 @@
 # into constraints/harness.md by the profile): build.sh, test.sh, run.sh,
 # bench.sh (+ bench/), quiet.sh, scope-map.tsv and optional base-patches/.
 # After each generate pass a trusted contract check runs (no measuring, no
-# game builds); a failing check skips the validator and feeds the next pass.
+# builds of the application); a failing check skips the validator and feeds the next pass.
 # The validator alone writes integration-test/tests-complete.md.
 #
 #   iterate  generate → check → validate loop    outputs: complete, iterations_run
@@ -24,7 +24,7 @@ contract_check() {
   {
     echo "# Contract check (run $run)"
     echo
-    echo "Trusted checks of the harness contract — no game builds, no measuring."
+    echo "Trusted checks of the harness contract — no builds of the application, no measuring."
     echo
     for f in build.sh test.sh run.sh bench.sh quiet.sh scope-map.tsv; do
       if [ -f "$HARNESS/$f" ]; then echo "- [x] \`$f\` present"; else echo "- [ ] **\`$f\` missing**"; ok=1; fi
@@ -106,8 +106,8 @@ step_iterate() {
   LOOP_MARKER="$HARNESS/tests-complete.md"
   LOOP_REPORT="$HARNESS/TESTS-VALIDATION.md"
   LOOP_LOG="4-tests"
-  LOOP_GEN_PROMPT="Work on the task described in work/4-generate-tests.md. Read constraints/harness-contract.md (the contract), constraints/harness.md, constraints/project.md, integration-test/AGENTS.md, integration-test/SOURCE-UNDER-INVESTIGATION.md and integration-test/WORK.md. If integration-test/smoke-test-report.md exists, fix every unchecked item first. Write the harness files; do not run them."
-  LOOP_VAL_PROMPT="Validate the harness as described in work/4-validate-tests.md, constraints/harness-contract.md and constraints/harness.md. Read integration-test/smoke-test-report.md first. Do not modify the harness files."
+  LOOP_GEN_PROMPT="Work on the task described in work/4-generate-tests.md. Read constraints/harness-contract.md (the contract), constraints/harness.md, constraints/project.md, integration-test/AGENTS.md, integration-test/SOURCE-UNDER-INVESTIGATION.md and integration-test/WORK.md. If integration-test/smoke-test-report.md exists, fix every unchecked item first. Write the harness files; do not run them. $(visual_note)"
+  LOOP_VAL_PROMPT="Validate the harness as described in work/4-validate-tests.md, constraints/harness-contract.md and constraints/harness.md. Read integration-test/smoke-test-report.md first. Do not modify the harness files. $(visual_note)"
   LOOP_HOOK=contract_check
   gen_validate_loop
 }

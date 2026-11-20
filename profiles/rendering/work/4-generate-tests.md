@@ -1,4 +1,4 @@
-# Harness implementation (Unity target)
+# Harness implementation (rendering application)
 
 > Read `constraints/harness-contract.md` (the contract — follow it exactly),
 > `constraints/harness.md`, `integration-test/AGENTS.md`,
@@ -23,12 +23,14 @@ Rules:
 
 - Call the target's own scripts as separate processes, with paths under `$CW_SRC` for
   building and testing and under `$CW_BASE` for measuring (`run.sh`, `--profile`).
-  Never `source` them. Never start Unity yourself if the target's scripts do it.
+  Never `source` them. Never start the engine's editor yourself if the target's
+  scripts do it.
 - Parse JSON with `$CW_PY` (a Python 3 with numpy/scipy/Pillow), not `jq`.
 - Write only inside the `--out` folder you are given (and the target's own working
   folders inside `$CW_SRC`/`$CW_BASE` that its tools use). Never write to
   `$SOURCE_REPO_PATH`.
-- `run.sh` copies the launch's raw output and screenshots into `--out` straight away,
+- `run.sh` copies the launch's raw output — and, with the rendered-output check on, one
+  screenshot per view (`screens`) — into `--out` straight away,
   reads the noise files itself, fills `metrics.json` exactly as the contract shows, and
   exits non-zero for a failed launch. Check the reported window size.
 - `build.sh` prints only the artefact path as its last stdout line; make the artefact

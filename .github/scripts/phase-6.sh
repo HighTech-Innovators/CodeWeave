@@ -4,13 +4,13 @@
 # Measures A against A2 (a second build of the same code) with the full A/B
 # protocol: whatever differs is noise. That gives the real spread per view, the
 # smallest detectable change (MDE), the false-positive rate and the visual
-# tolerance before any optimization is judged.
+# tolerance (VISUAL_CHECK=on) before any optimization is judged.
 #
 #   check    machine readiness (records the display setup the first time)
-#   aa       game A/A block
+#   aa       frame A/A block (the running application)
 #   bench    benchmark A/A block per benchmark entry
 #   profile  one profiling launch of A → integration-test/reports/profiler-summary.md
-#   baseline statistics → integration-test/reports/baseline.{json,md}, visual-noise.md
+#   baseline statistics → integration-test/reports/baseline.{json,md}; visual-noise.md (VISUAL_CHECK=on)
 set -e
 # shellcheck source=lib/common.sh
 source "$(dirname "$0")/lib/common.sh"
@@ -94,29 +94,36 @@ step_profile() {
 step_baseline() {
   mkdir -p "$REPORTS"
   rm -f "$REPORTS/baseline-complete.md"
-  local args=() b game_incomplete=""
+  local args=() b game_incomplete="" no_screens=""
   [ -f "$CW_MEASURE/blocks/aa/records.json" ] && args+=(--game "$CW_MEASURE/blocks/aa/records.json")
   for b in "$CW_MEASURE"/blocks/bench-aa-*/records.json; do [ -f "$b" ] && args+=(--bench "$b"); done
   [ "${#args[@]}" -gt 0 ] || { echo "ERROR: no A/A data" >&2; exit 1; }
   "$CW_PY" "$CW_TOOLS/ab_frames.py" baseline "${args[@]}" --out "$CW_MEASURE/baseline.json"
   cp "$CW_MEASURE/baseline.json" "$REPORTS/baseline.json"
   cp "$CW_MEASURE/baseline.md" "$REPORTS/baseline.md"
+  rm -f "$REPORTS/visual-noise.md"
   if [ -f "$CW_MEASURE/blocks/aa/records.json" ]; then
-    "$CW_PY" "$CW_TOOLS/image_diff.py" --records "$CW_MEASURE/blocks/aa/records.json" --out "$CW_MEASURE/visual-noise"
-    cp "$CW_MEASURE/visual-noise.md" "$REPORTS/visual-noise.md"
+    if visual_check_on; then
+      # The rendered-output check's tolerance per view is the spread between A screenshots.
+      "$CW_PY" "$CW_TOOLS/image_diff.py" --records "$CW_MEASURE/blocks/aa/records.json" --out "$CW_MEASURE/visual-noise"
+      cp "$CW_MEASURE/visual-noise.md" "$REPORTS/visual-noise.md"
+      no_screens=$("$CW_PY" -c 'import json, sys
+print("" if json.load(open(sys.argv[1]))["views"] else "none")' "$CW_MEASURE/visual-noise.json")
+    fi
     # Without a complete game A/A there is no noise for the game views, so Phase 7 could not judge them.
     game_incomplete=$("$CW_PY" -c 'import json, sys
 r = json.load(open(sys.argv[1]))
 print("" if r.get("complete") else (r.get("incomplete_reason") or "incomplete"))' "$CW_MEASURE/blocks/aa/records.json")
   fi
-  if [ -z "$game_incomplete" ]; then
+  if [ -z "$game_incomplete" ] && [ -z "$no_screens" ]; then
     {
       echo "# Baseline complete"
       echo
       echo "- Base commit: $(state_get BASE_SHA)"
       echo "- Builds reproducible: $(state_get REPRODUCIBLE)"
       echo "- Display: $(state_get DISPLAY_SETUP)"
-      echo "- Game A/A block: $([ -f "$CW_MEASURE/blocks/aa/records.json" ] && echo complete || echo 'not measured (benchmarks only)')"
+      echo "- Frame A/A block: $([ -f "$CW_MEASURE/blocks/aa/records.json" ] && echo complete || echo 'not measured (benchmarks only)')"
+      echo "- Rendered-output check: $VISUAL_CHECK"
     } > "$REPORTS/baseline-complete.md"
   fi
   git add -A "$HARNESS" proof && git commit -q -m "Phase 6: baseline and noise" || true
@@ -124,6 +131,13 @@ print("" if r.get("complete") else (r.get("incomplete_reason") or "incomplete"))
   if [ -n "$game_incomplete" ]; then
     echo "ERROR: the game A/A block is incomplete ($game_incomplete), so the game views have no noise baseline" \
          "and Phase 7 could not judge them. See $CW_MEASURE/blocks/aa/records.json; fix the cause, then rerun --phase 6." >&2
+    exit 1
+  fi
+  if [ -n "$no_screens" ]; then
+    echo "ERROR: the rendered-output check is on (VISUAL_CHECK=on), but run.sh listed no screenshots (\`screens\` in" \
+         "metrics.json) for any view, so a change to the picture could not be caught. Fix run.sh (see" \
+         "$CW_MEASURE/blocks/aa/launches/), or set VISUAL_CHECK=off in target.env for a project without a" \
+         "picture to compare; then rerun --phase 6." >&2
     exit 1
   fi
   set_output baseline_complete 1

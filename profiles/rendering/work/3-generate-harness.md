@@ -1,11 +1,11 @@
-# Harness design (Unity target)
+# Harness design (rendering application)
 
 > Read `constraints/project.md`, `constraints/harness.md`, `constraints/harness-context.md`
 > and `constraints/harness-contract.md` first. Git commits are handled externally.
 > **If `integration-test/HARNESS-VALIDATION.md` exists, read it before anything else and
 > address every Required Action.** Do not write `harness-complete.md` — the validator does.
 
-You design how this Unity project will be **built, tested and measured** by an automated
+You design how this project will be **built, tested and measured** by an automated
 optimization pipeline. A later phase implements your design as the scripts in
 `constraints/harness-contract.md`; after that the pipeline measures builds with and
 without each optimization and decides with statistics. Your design decides whether those
@@ -21,9 +21,11 @@ ADRs for every claim. Write **only** these files in `integration-test/`; never w
 
 Use exactly these numbered sections:
 
-1. **Target** — engine version, render pipeline, player scripting backend and runtime
-   (Mono/Boehm or IL2CPP), target platform of this machine, assemblies (`*.asmdef`) and
-   which are engine-free.
+1. **Target** — engine (name and version, or the project's own), graphics API and render
+   pipeline, the runtime the shipped build uses (compiler and optimisation level; for a
+   managed language its runtime and garbage collector — see `constraints/harness.md`),
+   target platform of this machine, the modules (libraries, assemblies) and which are
+   engine-free.
 2. **Build** — the exact command(s) of the target's own build tooling for this platform,
    artefact location, typical duration, requirements (licence, modules, nothing else may
    have the project open), side effects on the tree, and anything that makes the artefact
@@ -37,17 +39,18 @@ Use exactly these numbered sections:
    tooling: the command (and how it plays a build other than the developer's), the
    **views** (name each; how camera, time of day, seed are pinned), metrics available
    (frame / main-thread CPU / GPU ms; how many frames per view), window size control,
-   output files and their format, how noise is detected (which files), the machine lock
+   how a screenshot of each view is taken (the rendered-output check needs one per view
+   when it is on — your instruction says whether it is), output files and their format, how noise is detected (which files), the machine lock
    and health check, typical duration per launch, anything wiped between launches.
 5. **Capture length and base patches** — is the per-view capture long enough for
    effects of a few percent? If not, specify a measurement-only change (e.g. a launch
    argument for the number of frames, defaulting to today's value): file, exact edit,
-   why it cannot change game behaviour. Write "none needed" otherwise.
+   why it cannot change the application's behaviour. Write "none needed" otherwise.
 6. **Profiling** — how one diagnostic launch shows where frame time goes (per view, per
    subsystem/part).
-7. **Benchmarks** — the engine-free assembly and how it compiles outside Unity (existing
-   test projects), existing probes/benchmarks, how to run on the player's runtime
-   (Mono/Boehm) if the target supports it, and **3–6 benchmark candidates** for
+7. **Benchmarks** — the engine-free code (module or assembly) and how it compiles outside
+   the engine (existing test projects), existing probes/benchmarks, how to run on the
+   shipped build's runtime if it differs from development, and **3–6 benchmark candidates** for
    performance-map hotspots in engine-free code: name, what it exercises, realistic input
    (saved world, generated region, replay), what its fingerprint hashes.
 8. **Correctness scope map** — source folder globs → test scopes and self-tests that
@@ -66,7 +69,8 @@ Use exactly these numbered sections:
 Standing rules for anyone working with this harness: the contract in one page, the
 measuring rules from `constraints/harness.md` as they apply to this target (with the
 concrete commands), what the scripts must never do (write to `SOURCE_REPO_PATH`, run full
-screen, source the target's scripts, open a second Unity on the project, measure with
+screen, source the target's scripts, open a second instance of the engine's editor on the
+project, measure with
 `$CW_SRC` tools), and where outputs go.
 
 ## 3. `integration-test/WORK.md`

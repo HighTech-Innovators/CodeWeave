@@ -25,7 +25,7 @@ step_report() {
   if [ "${DRY_RUN:-false}" = "true" ]; then
     printf '# Phase 8 report (dry-run stub)\n' > "$REPORTS/phase8-report.md"
   else
-    agent_pass "Work on the task described in work/8-aggregate-report.md." "$model" \
+    agent_pass "Work on the task described in work/8-aggregate-report.md and constraints/project.md." "$model" \
       proof/8-aggregate-report.md proof/8-aggregate-report-session.md || agent_stop
     guard_target_unchanged proof/8-aggregate-report.md
     restore_framework
@@ -37,6 +37,8 @@ step_report() {
 step_publish() {
   local pub="$PWD/publish"
   rm -rf "$pub"; git -C src worktree prune
+  # A rerun finds ./src still on the results branch (see the end): free it for the worktree.
+  if [ "$(git -C src symbolic-ref -q --short HEAD)" = "$EXTERNAL_REPO_WORK_BRANCH" ]; then git -C src checkout -q --detach; fi
   git -C src fetch -q origin "+$EXTERNAL_REPO_WORK_BRANCH:refs/remotes/origin/$EXTERNAL_REPO_WORK_BRANCH" 2> /dev/null || true
   local start="origin/$EXTERNAL_REPO_WORK_BRANCH"
   git -C src rev-parse --verify -q "$start" > /dev/null || start="$(state_get ORIGINAL_SHA)"
@@ -47,6 +49,8 @@ step_publish() {
      "$REPORTS"/ab-comparison-opt*.md "$REPORTS"/ab-*-opt*.md "$REPORTS"/visual-*.md "$dest/" 2> /dev/null || true
   cp "$HARNESS/optimization-plan.md" "$HARNESS/SOURCE-UNDER-INVESTIGATION.md" "$dest/" 2> /dev/null || true
   cp proof/7-opt-*-complete.md "$dest/" 2> /dev/null || true
+  # Earlier rounds on the same base (run-local.sh new-round): their plans and reports.
+  if [ -d "$HARNESS/rounds" ]; then cp -R "$HARNESS/rounds" "$dest/rounds"; fi
   {
     echo "# CodeWeave optimization results"
     echo

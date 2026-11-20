@@ -23,9 +23,28 @@ mkdir -p "$CW_MEASURE"
 STATE="$CW_MEASURE/state.env"
 touch "$STATE"
 
-# Contract scripts read these.
+# Contract scripts read these. APP_WINDOW is the window size for targets measured in a
+# window; GAME_WINDOW is its older name, still set (and still read) for existing harnesses.
 export CW_SRC="$PWD/src" CW_BASE="$PWD/base" CW_MEASURE CW_PY
-export GAME_WINDOW="${GAME_WINDOW:-}"
+APP_WINDOW="${APP_WINDOW:-${GAME_WINDOW:-}}"
+export APP_WINDOW GAME_WINDOW="$APP_WINDOW"
+
+# Rendered-output check (VISUAL_CHECK=on|off; the rendering profile turns it on): compare
+# B's screenshots with A's per view; a change beyond the A-vs-A spread caps KEEP at INVESTIGATE.
+VISUAL_CHECK="${VISUAL_CHECK:-off}"
+case "$VISUAL_CHECK" in
+  on|off) ;;
+  *) echo "ERROR: VISUAL_CHECK must be on or off (got '$VISUAL_CHECK')" >&2; exit 2 ;;
+esac
+visual_check_on() { [ "$VISUAL_CHECK" = on ]; }
+# visual_note — one sentence for agent instructions: is the rendered-output check on?
+visual_note() {
+  if visual_check_on; then
+    echo "The rendered-output check is on (VISUAL_CHECK=on): run.sh saves one screenshot per view, and a change to the picture beyond the A-vs-A noise caps a KEEP at INVESTIGATE."
+  else
+    echo "The rendered-output check is off (VISUAL_CHECK=off): no screenshots are needed or compared."
+  fi
+}
 
 # Exit codes the runner understands.
 EXIT_RESUMABLE=75     # stopped on purpose (agent failure, machine not fit): resume later
@@ -158,7 +177,7 @@ measure_block() {
     --pairs "${MEASURE_PAIRS:-6}" --order "$order" --heat-soak "$soak" --gap "$gap" \
     --warmups "${MEASURE_WARMUPS:-1}" --retries "${MEASURE_RETRIES:-2}" \
     --launch-timeout "${MEASURE_LAUNCH_TIMEOUT:-900}" ${entry:+--entry "$entry"} \
-    ${GAME_WINDOW:+--window "$GAME_WINDOW"} $dry_flags || rc=$?
+    ${APP_WINDOW:+--window "$APP_WINDOW"} $dry_flags || rc=$?
   if [ $rc -eq 3 ]; then
     echo "The target reports the Mac is not fit to measure. Rerun the same phase to resume." >&2
     exit $EXIT_RESUMABLE

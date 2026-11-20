@@ -111,11 +111,11 @@ You will need access to the GitHub Copilot CLI, which the workflow installs auto
 
 You will need two fine-grained personal access tokens stored as repository secrets. `COPILOT_TOKEN` authenticates the Copilot CLI and needs only the Copilot user requests Read account permission, with no repository permissions. `PUSH_TOKEN` needs Contents Read and write on the target repository alone, because Phase 2 pushes Architecture Decision Records and Phase 7 pushes optimization branches.
 
-You will need the target's own build and test toolchain available on the runner. CodeWeave does not assume a particular language or package manager; you pin the toolchain your target needs in [`constraints/project.md`](constraints/project.md) and the optional [`constraints/harness.md`](constraints/harness.md), and the pipeline reads it from the generated manifest rather than hardcoding it.
+You will need the target's own build and test toolchain available on the runner. CodeWeave does not assume a particular language or package manager; you pin the toolchain your target needs in [`project/constraints/project.md`](project/constraints/project.md) and the optional [`project/constraints/harness.md`](project/constraints/harness.md), and the pipeline reads it from the generated manifest rather than hardcoding it.
 
 ### Steps
 
-Fork this repository. Configure the run in [`.github/codeweave.config`](.github/codeweave.config), which holds the target repository URL and branch, the per-phase iteration caps, and the per-phase model schedules; none of this is hardcoded in the workflow logic. Fill in the constraint template in [`constraints/project.md`](constraints/project.md) with your target's real constraints, such as toolchain versions, build environment variables, and scope limits, and note that `constraints/harness.md` and `constraints/harness-context.md` are optional target-specific templates for the harness-design phase. Add the two secrets. Then smoke-test the structure before spending model time:
+Fork this repository. Configure the run in [`.github/codeweave.config`](.github/codeweave.config), which holds the target repository URL and branch, the per-phase iteration caps, and the per-phase model schedules; none of this is hardcoded in the workflow logic. Fill in the constraint template in [`project/constraints/project.md`](project/constraints/project.md) with your target's real constraints, such as toolchain versions, build environment variables, and scope limits, and note that `project/constraints/harness.md` and `project/constraints/harness-context.md` are optional target-specific templates for the harness-design phase. At the start of every job CodeWeave assembles the `constraints/` the agents read (generated, git-ignored) from the rules for your type of project, [`profiles/<CODEWEAVE_PROFILE>/`](profiles) (`pytorch` by default), with your project's rules appended; where the two differ, yours win. Add the two secrets. Then smoke-test the structure before spending model time:
 
 ```bash
 gh workflow run codeweave.yml -f dry_run=true
@@ -140,7 +140,7 @@ Everything CodeWeave writes into the target repository lives in one folder, `cod
 `run-local.sh` runs CodeWeave on your own machine: Phases 1–2 (book and ADRs) with the same step scripts as the workflows (`.github/scripts/phase-{1,2}.sh`), and, locally only, Phases 3–8 (harness, base build, A/A noise baseline, optimizations with paired A/B verdicts, report) through the [harness contract](docs/harness-contract.md), with review stops after Phases 4 and 6. The target does not need to be on GitHub: CodeWeave works on a bare copy of it and never writes to your repository. Local runs use Claude Code as the agent by default (`--agent copilot` for the Copilot CLI).
 
 ```sh
-./run-local.sh init my-game ~/code/my-game   # picks the Unity profile for a Unity project
+./run-local.sh init my-game ~/code/my-game   # picks the profile: unity, rendering (shaders found) or generic
 ./run-local.sh run my-game                   # Phase 1, then Phase 2
 ```
 
@@ -254,7 +254,7 @@ Several limitations are worth stating plainly. The pipeline requires a self-host
 
 ## Documentation, community, and trust
 
-The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt files live under [`work/`](work), the language-neutral constraint templates you fill in for your target live under [`constraints/`](constraints), and a run's proof artifacts appear in `proof/`, which is created automatically.
+The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt files live under [`work/`](work), the language-neutral constraint templates you fill in for your target live under [`project/constraints/`](project/constraints), the rules per type of project under [`profiles/`](profiles), and a run's proof artifacts appear in `proof/`, which is created automatically.
 
 The near-term direction is set out in [`ROADMAP.md`](ROADMAP.md), whose current focus is publishing a real run and verifying portability across additional targets through the manifest seam. Contributions are welcome; please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, and include the relevant `proof/` artifacts when you report pipeline behavior. For support, open a [GitHub issue](../../issues). Because the pipeline handles two access tokens and pushes branches to a target repository, please scope the tokens minimally as described under [Prerequisites](#quickstart) and report any vulnerability through [`SECURITY.md`](SECURITY.md).
 

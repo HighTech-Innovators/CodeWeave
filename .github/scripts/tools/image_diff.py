@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""image_diff.py — did a change alter what the game draws? (trusted)
+"""image_diff.py — did a change alter what the application draws? (trusted; VISUAL_CHECK=on)
 
 Compares the screenshots of one measurement block (written by measure.py from
 run.sh's `screens`). Even identical builds never draw identical frames, so the

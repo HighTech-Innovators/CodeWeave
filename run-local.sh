@@ -7,6 +7,7 @@
 #   ./run-local.sh check  <name>          is the Mac fit to measure? (read-only)
 #   ./run-local.sh status <name>
 #   ./run-local.sh sync   <name>
+#   ./run-local.sh new-round <name>     another round of optimizations on the same base (keeps 1–6)
 #   ./run-local.sh reset  <name> [--yes]
 #
 # Phases: 1 book, 2 ADRs (the default: `run <name>` = 1–2), 3 harness design,
@@ -18,7 +19,10 @@
 #
 # Each target gets a run folder in $CODEWEAVE_RUNS_DIR (default ~/codeweave-runs):
 #   <name>/target.env        this target's settings; overrides anything in .github/.env
-#   <name>/constraints/      optional: files here replace the profile's constraint files
+#   <name>/constraints/      optional: this project's own rules (project.md, …), added to the
+#                            profile's files of the same name; they win where the two differ
+#   <name>/integrity-patterns.tsv  optional: paths to protect or flag, added to the profile's
+#                            (`-kind<TAB>pattern` removes one of the profile's)
 #   <name>/harness/          optional: files here replace the generated harness
 #   <name>/mirror.git        a bare copy of your repository. CodeWeave clones from it and
 #                            pushes its branches to it; your repository is never written to.
@@ -27,10 +31,17 @@
 #   <name>/measure.noindex/  trusted measurement data (outside the agent's reach)
 #
 # Profiles: each folder under profiles/ supplies constraints (and, for Phases
-# 3–8, prompts and hooks): `generic` (any project), `unity` (Unity projects).
-# `default` uses the repository's own constraints/ (the GitHub Actions target,
-# currently PyTorch). `init` picks `unity` for a Unity project and `generic`
-# otherwise; --profile overrides.
+# 3–8, prompts, hooks, integrity patterns and settings in profile.env):
+# `generic` (any project), `rendering` (anything whose performance is frame time:
+# games, engines, renderers, visualisations — also custom engines), `unity` (Unity
+# projects; builds on rendering), `pytorch` (the GitHub Actions PyTorch target;
+# `default` is its old name). A profile builds on another with PROFILE_BASE in its
+# profile.env. `init` picks `unity` for a Unity project, suggests `rendering` when
+# the repository has shaders or a *.uproject (and asks, when run in a terminal),
+# and `generic` otherwise; --profile overrides.
+#
+# Settings are read in this order, later ones winning: .github/.env, the profile
+# chain's profile.env files (e.g. rendering, then unity), the target's target.env.
 #
 # Agent: `claude` (Claude Code CLI, the default for local runs) or `copilot`
 # (GitHub Copilot CLI). Stored as AGENT_CLI in target.env.
@@ -40,6 +51,8 @@
 set -eo pipefail
 
 CW_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=.github/scripts/lib/profiles.sh
+source "$CW_ROOT/.github/scripts/lib/profiles.sh"
 RUNS_DIR="${CODEWEAVE_RUNS_DIR:-$HOME/codeweave-runs}"
 EXIT_RESUMABLE=75
 
@@ -55,8 +68,20 @@ run_dir() {
   echo "$RUNS_DIR/$1"
 }
 
-# load_env DIR — .github/.env, then the target's overrides, into the environment.
+# profile_name NAME — the profile folder under profiles/ (`default`, the old name of the
+# GitHub Actions PyTorch profile, and an empty name mean `pytorch`).
+profile_name() {
+  case "${1:-}" in
+    ''|default) echo pytorch ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# load_env DIR — .github/.env, the profile chain's settings, then the target's overrides,
+# into the environment. target.env is read first to learn the profile, and again last so
+# it wins over the profile's settings.
 load_env() {
+  local layer
   [ -f "$1/target.env" ] || die "no target at $1 — create it with: $0 init <name> <path-to-repo>"
   set -a
   # shellcheck disable=SC1091
@@ -64,7 +89,34 @@ load_env() {
   # shellcheck disable=SC1090
   . "$1/target.env"
   set +a
+  PROFILE_CHAIN="$(profile_chain "$CW_ROOT/profiles/$(profile_name "${CODEWEAVE_PROFILE:-}")")" \
+    || die "unknown profile '${CODEWEAVE_PROFILE:-}' (CODEWEAVE_PROFILE in $1/target.env)"
+  while IFS= read -r layer; do
+    if [ -f "$layer/profile.env" ]; then
+      set -a
+      # shellcheck disable=SC1090,SC1091
+      . "$layer/profile.env"
+      set +a
+    fi
+  done <<EOF
+$PROFILE_CHAIN
+EOF
+  set -a
+  # shellcheck disable=SC1090
+  . "$1/target.env"
+  set +a
   export CW_RUN_DIR="$1" CW_MEASURE="$1/measure.noindex"
+}
+
+# state_value KEY — a value from the measurement state (Phases 5–8), empty if unset.
+state_value() { { grep "^$1=" "$CW_MEASURE/state.env" 2> /dev/null || true; } | tail -1 | cut -d= -f2-; }
+
+# phase7_numbers — this round's optimization numbers. Rounds number on from the last one
+# (new-round), so earlier rounds' branches, verdicts and measurements stay as they are.
+phase7_numbers() {
+  local first
+  first="$(state_value PHASE7_FIRST)"; first="${first:-1}"
+  seq "$first" $((first + ${PHASE7_MAX_OPTIMIZATIONS:-3} - 1))
 }
 
 # sync_mirror DIR — bring the copy's base branch up to date with the source.
@@ -92,29 +144,46 @@ ensure_tools_venv() {
 
 # refresh_workspace DIR — copy the current prompts, scripts, constraints, profile
 # and any harness override in, and commit them so agents' edits can be undone.
+# Profile layers (PROFILE_CHAIN, base first) each add to the one below: prompts and
+# hooks of the same name replace the base's, integrity patterns are appended.
 refresh_workspace() {
-  local ws="$1/workspace" constraints profile_dir
+  local ws="$1/workspace" layer pats has_pats=""
   rm -rf "$ws/work" "$ws/constraints" "$ws/.github"
   mkdir -p "$ws/.github/profile"
   cp -R "$CW_ROOT/work" "$ws/work"
   cp -R "$CW_ROOT/.github/scripts" "$ws/.github/scripts"
   cp "$CW_ROOT/integration-test/_tools/ab_compare.py" "$ws/.github/scripts/tools/ab_compare.py"
   cp "$CW_ROOT/.github/copilot-instructions.md" "$ws/.github/copilot-instructions.md"
-  if [ "${CODEWEAVE_PROFILE:-default}" = "default" ]; then
-    constraints="$CW_ROOT/constraints"
-  else
-    profile_dir="$CW_ROOT/profiles/$CODEWEAVE_PROFILE"
-    constraints="$profile_dir/constraints"
-    [ -d "$profile_dir/work" ] && cp -R "$profile_dir/work/." "$ws/work/"
-    [ -d "$profile_dir/hooks" ] && cp -R "$profile_dir/hooks" "$ws/.github/profile/hooks"
-    [ -f "$profile_dir/integrity-patterns.tsv" ] && cp "$profile_dir/integrity-patterns.tsv" "$ws/.github/profile/"
-  fi
-  [ -d "$constraints" ] || die "profile '$CODEWEAVE_PROFILE' has no constraints/ folder ($constraints)"
-  cp -R "$constraints" "$ws/constraints"
+  pats="$ws/.github/profile/integrity-patterns.tsv"
+  : > "$pats"
+  while IFS= read -r layer; do
+    if [ -d "$layer/work" ]; then cp -R "$layer/work/." "$ws/work/"; fi
+    if [ -d "$layer/hooks" ]; then mkdir -p "$ws/.github/profile/hooks"; cp -R "$layer/hooks/." "$ws/.github/profile/hooks/"; fi
+    if [ -f "$layer/integrity-patterns.tsv" ]; then
+      printf '\n# ---- profile %s ----\n' "$(basename "$layer")" >> "$pats"
+      cat "$layer/integrity-patterns.tsv" >> "$pats"
+      has_pats=1
+    fi
+  done <<EOF
+$PROFILE_CHAIN
+EOF
+  # Constraints: the profile chain's rules, with this project's own (<run>/constraints/) added
+  # under "This project" — they win where the two differ.
+  bash "$CW_ROOT/.github/scripts/assemble-constraints.sh" "$(echo "$PROFILE_CHAIN" | tail -1)" "$1" "$ws/constraints"
   cp "$CW_ROOT/docs/harness-contract.md" "$ws/constraints/harness-contract.md"
-  if [ -n "$(ls -A "$1/constraints" 2>/dev/null)" ]; then
-    cp -R "$1/constraints/." "$ws/constraints/"
+  # Integrity patterns: the profile chain's, then this project's additions and removals (-kind lines).
+  if [ -f "$1/integrity-patterns.tsv" ]; then
+    printf '\n# ---- this project (%s) ----\n' "$1/integrity-patterns.tsv" >> "$pats"
+    cat "$1/integrity-patterns.tsv" >> "$pats"
+    has_pats=1
   fi
+  if [ -n "$has_pats" ]; then
+    python3 "$CW_ROOT/.github/scripts/tools/integrity.py" patterns --patterns "$pats" \
+      || die "fix the integrity patterns (see above; the project's are in $1/integrity-patterns.tsv)"
+  else
+    rm -f "$pats"
+  fi
+  echo "settings: rendered-output check ${VISUAL_CHECK:-off}"
   if [ -n "$(ls -A "$1/harness" 2>/dev/null)" ]; then
     mkdir -p "$ws/integration-test"
     cp -R "$1/harness/." "$ws/integration-test/"
@@ -127,8 +196,47 @@ refresh_workspace() {
   git -C "$ws" commit -q -m "Refresh framework (prompts, scripts, constraints, profile)" 2> /dev/null || true
 }
 
+# rendering_evidence REPO BRANCH — why REPO looks like a rendering application (empty if it
+# does not): an Unreal project file, or shader sources outside vendored folders.
+rendering_evidence() {
+  local files n
+  files="$(git -C "$1" ls-tree -r --name-only "$2" 2> /dev/null || true)"
+  if echo "$files" | grep -qE '^[^/]+\.uproject$'; then
+    echo "an Unreal project ($(echo "$files" | grep -E '^[^/]+\.uproject$' | head -1); there is no Unreal profile yet)"
+    return
+  fi
+  n=$(echo "$files" | grep -iE '\.(hlsl|glsl|metal|wgsl|shader|compute|frag|vert|usf|ush)$' \
+        | grep -vE '(^|/)(node_modules|vendor|third_party|[Tt]hird[Pp]arty|external|extern|deps)/' | grep -c . || true)
+  [ "$n" -gt 0 ] && echo "$n shader file(s)"
+  return 0
+}
+
+# choose_profile REPO BRANCH NAME — the profile for a new target, with the reason on stderr.
+# Unity is recognised by its project files. Otherwise rendering is suggested when the
+# repository has shaders or a *.uproject; in a terminal the operator is asked to confirm.
+choose_profile() {
+  local evidence default answer
+  if [ -f "$1/ProjectSettings/ProjectVersion.txt" ]; then
+    echo "  profile: unity (ProjectSettings/ProjectVersion.txt found)" >&2; echo unity; return
+  fi
+  evidence="$(rendering_evidence "$1" "$2")"
+  if [ -n "$evidence" ]; then default=rendering; else default=generic; fi
+  if [ -t 0 ] && [ -t 2 ]; then
+    if [ -n "$evidence" ]; then echo "  $3 has $evidence." >&2; fi
+    printf '  Does %s render its results — a game, engine, renderer or visualisation whose performance is frame time? [%s] ' \
+      "$3" "$([ "$default" = rendering ] && echo 'Y/n' || echo 'y/N')" >&2
+    read -r answer || answer=""
+    case "$answer" in
+      [Yy]*) default=rendering ;;
+      [Nn]*) default=generic ;;
+    esac
+  fi
+  echo "  profile: $default${evidence:+ ($evidence)}" >&2
+  echo "$default"
+}
+
 cmd_init() {
-  local name="${1:-}" repo_arg="${2:-}" branch="" profile="" agent="claude" repo dir
+  local name="${1:-}" repo_arg="${2:-}" branch="" profile="" agent="claude" repo dir chain visual layer
   [ -n "$name" ] && [ -n "$repo_arg" ] || usage 2
   shift 2
   while [ $# -gt 0 ]; do
@@ -147,12 +255,18 @@ cmd_init() {
     || die "$repo has no current branch — pass --branch"
   git -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" > /dev/null \
     || die "branch '$branch' not found in $repo"
-  if [ -z "$profile" ]; then
-    if [ -f "$repo/ProjectSettings/ProjectVersion.txt" ]; then profile="unity"; else profile="generic"; fi
+  [ -n "$profile" ] || profile="$(choose_profile "$repo" "$branch" "$name")"
+  profile="$(profile_name "$profile")"
+  if [ ! -d "$CW_ROOT/profiles/$profile/constraints" ]; then
+    die "unknown profile '$profile' — available: $(ls "$CW_ROOT/profiles" 2>/dev/null | tr '\n' ' ')"
   fi
-  if [ "$profile" != "default" ] && [ ! -d "$CW_ROOT/profiles/$profile/constraints" ]; then
-    die "unknown profile '$profile' — available: default $(ls "$CW_ROOT/profiles" 2>/dev/null | tr '\n' ' ')"
-  fi
+  chain="$(profile_chain "$CW_ROOT/profiles/$profile")" || die "profile '$profile' is broken (see above)"
+  visual=off
+  while IFS= read -r layer; do
+    [ -z "$(profile_setting "$layer" VISUAL_CHECK)" ] || visual="$(profile_setting "$layer" VISUAL_CHECK)"
+  done <<EOF
+$chain
+EOF
 
   dir="$(run_dir "$name")"
   [ ! -e "$dir" ] || die "$dir already exists — use '$0 reset $name' to start over, or pick another name"
@@ -182,7 +296,9 @@ GIT_USER_EMAIL=codeweave@localhost
 # Phases 3–8: stop for review after these phases (empty = run through)
 CHECKPOINTS="4 6"
 # PHASE7_MAX_OPTIMIZATIONS=3
-# GAME_WINDOW=1600x900       # game window size, for targets measured in a game window
+# APP_WINDOW=1600x900        # window size, for targets measured in a window
+# Rendered-output check (compare screenshots of A and B per view): $visual in the $profile profile.
+# VISUAL_CHECK=$([ "$visual" = on ] && echo off || echo on)
 
 # Examples of overrides. With claude, model names can be aliases (opus, sonnet,
 # haiku: the newest model of that family) or full IDs; the Copilot names in
@@ -193,8 +309,9 @@ CHECKPOINTS="4 6"
 # AGENT_EFFORT=high          # claude only: low, medium, high, xhigh, max
 EOF
 
-  say "Target '$name' ready ($profile profile, $agent agent, branch $branch)"
-  echo "  settings:    $dir/target.env"
+  say "Target '$name' ready ($(profile_chain_names "$CW_ROOT/profiles/$profile") profile, $agent agent, branch $branch)"
+  echo "  settings:    $dir/target.env (another profile: CODEWEAVE_PROFILE there, or init again with --profile)"
+  echo "  own rules:   $dir/constraints/project.md (optional; added to the $profile profile's)"
   echo "  try it:      $0 run $name --dry-run"
   echo "  analyse:     $0 run $name"
 }
@@ -263,7 +380,7 @@ cmd_run() {
   for p in $(seq "$from" "$to"); do
     for step in $(phase_steps "$p"); do
       if [ "$p" = 7 ] && [ "$step" = cycles ]; then
-        for n in $(seq 1 "${PHASE7_MAX_OPTIMIZATIONS:-3}"); do run_step 7 cycle "$n"; done
+        for n in $(phase7_numbers); do run_step 7 cycle "$n"; done
         continue
       fi
       run_step "$p" "$step"
@@ -387,7 +504,7 @@ cmd_status() {
   dir="$(run_dir "${1:-}")"
   load_env "$dir"
   ws="$dir/workspace"
-  echo "Target:     $EXTERNAL_REPO_NAME (${CODEWEAVE_PROFILE:-default} profile, ${AGENT_CLI:-copilot} agent)"
+  echo "Target:     $EXTERNAL_REPO_NAME ($(profile_chain_names "$(echo "$PROFILE_CHAIN" | tail -1)") profile, ${AGENT_CLI:-copilot} agent, rendered-output check ${VISUAL_CHECK:-off})"
   echo "Source:     $SOURCE_REPO_PATH — $EXTERNAL_REPO_BRANCH @ $(git -C "$SOURCE_REPO_PATH" rev-parse --short "refs/heads/$EXTERNAL_REPO_BRANCH")"
   echo "Copy:       $dir/mirror.git — $EXTERNAL_REPO_BRANCH @ $(git -C "$dir/mirror.git" rev-parse --short "refs/heads/$EXTERNAL_REPO_BRANCH")"
   work="$(git -C "$dir/mirror.git" rev-parse --short --verify --quiet "refs/heads/$EXTERNAL_REPO_WORK_BRANCH" || echo 'not created yet')"
@@ -397,6 +514,9 @@ cmd_status() {
   echo "Harness:    design: $([ -f "$ws/integration-test/harness-complete.md" ] && echo yes || echo no); implemented: $([ -f "$ws/integration-test/tests-complete.md" ] && echo yes || echo no); frozen: $([ -f "$CW_MEASURE/manifests/harness.json" ] && echo yes || echo no)"
   if [ -f "$CW_MEASURE/state.env" ]; then
     echo "Base:       $(grep '^BASE_SHA=' "$CW_MEASURE/state.env" | tail -1 | cut -d= -f2- | cut -c1-12) · A built: $(grep -q '^A_CODE=' "$CW_MEASURE/state.env" && echo yes || echo no) · baseline: $([ -f "$ws/integration-test/reports/baseline-complete.md" ] && echo yes || echo no)"
+  fi
+  if [ -n "$(state_value PHASE7_ROUND)" ]; then
+    echo "Phase 7:    round $(state_value PHASE7_ROUND): optimizations $(phase7_numbers | head -1)–$(phase7_numbers | tail -1) (earlier rounds: integration-test/rounds/)"
   fi
   for c in "$CW_MEASURE"/cycles/opt*/done; do
     [ -f "$c" ] && echo "Opt $(basename "$(dirname "$c")" | sed 's/opt//'):      $(cat "$c")"
@@ -412,6 +532,50 @@ cmd_sync() {
   dir="$(run_dir "${1:-}")"
   load_env "$dir"
   sync_mirror "$dir"
+}
+
+# cmd_new_round NAME — another round of Phase 7 on the same base and frozen harness, e.g. after
+# changing this project's rules (Phases 1–6 are kept). The finished round's plan and report move to
+# integration-test/rounds/<R>/ and its selection logs to proof/round-<R>/; the next plan's
+# optimizations are numbered on from the last one, so earlier branches, verdicts and
+# measurements stay as they are. Phase 8 then reports every round.
+cmd_new_round() {
+  local name="${1:-}" dir ws plan round nums n last rd f
+  [ -n "$name" ] || usage 2
+  dir="$(run_dir "$name")"
+  load_env "$dir"
+  ws="$dir/workspace"; plan="$ws/integration-test/optimization-plan.md"
+  [ -f "$CW_MEASURE/manifests/plan.json" ] && [ -f "$plan" ] \
+    || die "no frozen Phase 7 plan yet — the first round starts with: $0 run $name --phases 7-8"
+  round="$(state_value PHASE7_ROUND)"; round="${round:-1}"
+  nums="$(sed -n 's/^## Optimization \([0-9][0-9]*\):.*/\1/p' "$plan")"
+  [ -n "$nums" ] || die "$plan lists no optimizations"
+  for n in $nums; do
+    [ -f "$CW_MEASURE/cycles/opt$n/done" ] \
+      || die "optimization $n of round $round is not finished — finish the round first: $0 run $name --phases 7-8"
+  done
+  last="$(echo "$nums" | sort -n | tail -1)"
+  [ -f "$ws/integration-test/reports/phase8-report.md" ] \
+    || echo "  note: round $round has no Phase 8 report; the next report covers every round"
+
+  rd="integration-test/rounds/$round"
+  mkdir -p "$ws/$rd" "$ws/proof/round-$round" "$CW_MEASURE/rounds/$round"
+  mv "$plan" "$ws/$rd/optimization-plan.md"
+  for f in phase8-report.md family-correction.md family-correction.json; do
+    if [ -f "$ws/integration-test/reports/$f" ]; then mv "$ws/integration-test/reports/$f" "$ws/$rd/$f"; fi
+  done
+  for f in "$ws"/proof/7-select*.md "$ws"/proof/7-author-bench*.md "$ws"/proof/8-*.md; do
+    if [ -f "$f" ]; then mv "$f" "$ws/proof/round-$round/"; fi
+  done
+  mv "$CW_MEASURE/manifests/plan.json" "$CW_MEASURE/rounds/$round/plan.json"
+  { echo "PHASE7_ROUND=$((round + 1))"; echo "PHASE7_FIRST=$((last + 1))"; } >> "$CW_MEASURE/state.env"
+  git -C "$ws" add -A integration-test proof
+  git -C "$ws" commit -q -m "Phase 7: round $round archived in $rd; round $((round + 1)) starts at optimization $((last + 1))" || true
+
+  say "Round $((round + 1)) ready: its optimizations are numbered from $((last + 1)) (PHASE7_MAX_OPTIMIZATIONS=${PHASE7_MAX_OPTIMIZATIONS:-3})"
+  echo "  round $round:  $ws/$rd/ (plan, report); its branches, verdicts and measurements are kept"
+  echo "  same base, harness and noise baseline (Phases 1–6); rules from $dir/constraints/ are read afresh"
+  echo "  next:     $0 run $name --phases 7-8"
 }
 
 cmd_reset() {
@@ -438,6 +602,7 @@ case "${1:-}" in
   check)  shift; cmd_check "$@" ;;
   status) shift; cmd_status "$@" ;;
   sync)   shift; cmd_sync "$@" ;;
+  new-round) shift; cmd_new_round "$@" ;;
   reset)  shift; cmd_reset "$@" ;;
   -h|--help|help|'') usage 0 ;;
   *) echo "unknown command: $1" >&2; usage 2 ;;

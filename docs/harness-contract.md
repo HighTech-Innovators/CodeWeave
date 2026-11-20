@@ -15,7 +15,7 @@ receive these environment variables:
 | `CW_BASE` | a checkout of the frozen base commit (`<workspace>/base`, Phase 5+): **use the measuring tools from here**, so A and B are measured by identical code |
 | `CW_MEASURE` | trusted data folder (do not write outside the `--out` folder you are given) |
 | `CW_PY` | a Python 3 with scipy, numpy and Pillow |
-| `GAME_WINDOW` | requested window size (e.g. `1600x900`) for targets measured in a window |
+| `APP_WINDOW` | requested window size (e.g. `1600x900`) for targets measured in a window; also set as `GAME_WINDOW`, its older name |
 | `SOURCE_REPO_PATH` | the user's own checkout — **read-only** |
 
 Never write into `SOURCE_REPO_PATH`. Never write to the agent-facing `integration-test/reports/`
@@ -66,7 +66,10 @@ One measurement launch of the given build. Write `DIR/metrics.json`:
   = work still loading in that view (non-zero makes the launch be repeated).
 - `noise.quiet`: false when the target's own noise detection saw other load during the
   launch; list the reasons.
-- `screens`: screenshot per view, relative to `DIR`, copied into `DIR`.
+- `screens`: screenshot per view, relative to `DIR`, copied into `DIR`. Required when the
+  rendered-output check is on (`VISUAL_CHECK=on`, the `rendering` profile's default): the
+  pipeline compares B's screenshots with A's, and Phase 6 stops when the base build gives
+  none. With the check off, `screens` may be left out.
 - Copy the target's raw output for the launch into `DIR` too.
 - Exit non-zero if the launch failed; then `metrics.json` may be absent.
 - `--profile`: one diagnostic launch instead; write `DIR/profile.md` — a readable

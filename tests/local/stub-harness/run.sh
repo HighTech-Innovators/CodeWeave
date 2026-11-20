@@ -18,7 +18,7 @@ if [ "$PROFILE" = 1 ]; then
 fi
 FAST=0
 grep -q codeweave-dry-run "$ART/Contents/Resources/Data/Managed/Game.dll" 2> /dev/null && FAST=1
-"$CW_PY" - "$OUT" "$FAST" "${GAME_WINDOW:-1600x900}" <<'EOF'
+"$CW_PY" - "$OUT" "$FAST" "${APP_WINDOW:-1600x900}" <<'EOF'
 import json, random, sys
 import numpy as np
 from PIL import Image

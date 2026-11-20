@@ -11,7 +11,12 @@ Pattern file: one entry per line, `kind<TAB>pattern` with kind one of
   protected   path glob (fnmatch; `*` crosses directories) — always restored
   tuning      path glob — allowed, but caps a KEEP at INVESTIGATE (tuning-change)
   sensitive   regular expression on added source lines — caps at INVESTIGATE
+  -protected, -tuning, -sensitive
+              remove that exact pattern, given on an earlier line (a project's file is
+              appended to its profile's, so a project can drop one of the profile's rules)
 Blank lines and lines starting with # are ignored.
+
+  integrity.py patterns --patterns FILE   check the file; print the rules in effect
 """
 
 import argparse
@@ -53,16 +58,26 @@ def collect(root, paths):
     return out
 
 
-def load_patterns(path):
+def load_patterns(path, removed=None):
     pats = {"protected": [], "tuning": [], "sensitive": []}
-    for line in Path(path).read_text().splitlines():
+    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         kind, _, pat = line.partition("\t")
-        if kind not in pats or not pat.strip():
-            sys.exit(f"bad pattern line: {line!r}")
-        pats[kind].append(pat.strip())
+        drop = kind.startswith("-")
+        kind, pat = kind.lstrip("-"), pat.strip()
+        if kind not in pats or not pat:
+            sys.exit(f"{path}:{n}: bad pattern line: {line!r} (kind<TAB>pattern; kind: protected, tuning, sensitive, or one of them with a leading -)")
+        if not drop:
+            if pat not in pats[kind]:
+                pats[kind].append(pat)
+        elif pat in pats[kind]:
+            pats[kind].remove(pat)
+            if removed is not None:
+                removed.append((kind, pat))
+        else:
+            sys.exit(f"{path}:{n}: -{kind} {pat!r} removes nothing: no earlier {kind} line has exactly that pattern")
     return pats
 
 
@@ -139,9 +154,19 @@ def cmd_inspect(a):
           f"sensitive patterns {sensitive or 'none'}, protected {len(result['protected_hits'])}")
 
 
+def cmd_patterns(a):
+    removed = []
+    pats = load_patterns(a.patterns, removed)
+    for kind, pat in removed:
+        print(f"  removed {kind}: {pat}")
+    print("integrity patterns: " + ", ".join(f"{len(v)} {k}" for k, v in pats.items())
+          + (f" ({len(removed)} removed by the project)" if removed else ""))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    pp = sub.add_parser("patterns"); pp.add_argument("--patterns", required=True)
     f = sub.add_parser("freeze"); f.add_argument("--root", required=True); f.add_argument("--out", required=True); f.add_argument("paths", nargs="+")
     v = sub.add_parser("verify"); v.add_argument("--root", required=True); v.add_argument("--manifest", required=True)
     for name in ("protect", "inspect"):
@@ -150,7 +175,8 @@ def main():
         if name == "inspect":
             p.add_argument("--out", required=True)
     a = ap.parse_args()
-    {"freeze": cmd_freeze, "verify": cmd_verify, "protect": cmd_protect, "inspect": cmd_inspect}[a.cmd](a)
+    {"freeze": cmd_freeze, "verify": cmd_verify, "protect": cmd_protect, "inspect": cmd_inspect,
+     "patterns": cmd_patterns}[a.cmd](a)
 
 
 if __name__ == "__main__":

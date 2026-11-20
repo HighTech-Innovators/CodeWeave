@@ -20,6 +20,9 @@ VAL="$HARNESS/OPTIMIZATION-VALIDATION.md"
 REPORTS="$HARNESS/reports"
 PATTERNS="$CW_PROFILE_DIR/integrity-patterns.tsv"
 MAX_OPT="${PHASE7_MAX_OPTIMIZATIONS:-3}"
+# Optimizations are numbered across rounds (run-local.sh new-round): this round's are FIRST..LAST.
+FIRST="$(state_get PHASE7_FIRST)"; FIRST="${FIRST:-1}"
+LAST=$((FIRST + MAX_OPT - 1))
 
 # entry_field N FIELD — "- **FIELD**: value" inside "## Optimization N:".
 entry_block() { awk -v n="$1" '/^## Optimization [0-9]+:/{on=($3==n":")} on' "$PLAN"; }
@@ -31,7 +34,7 @@ val_field()   { grep -m1 "^- \*\*$1\*\*:" "$VAL" 2> /dev/null | sed 's/^[^:]*: *
 
 validate_plan() {
   local n path view metric bench problems=""
-  for n in $(seq 1 "$MAX_OPT"); do
+  for n in $(seq "$FIRST" "$LAST"); do
     grep -q "^## Optimization $n:" "$PLAN" || { problems="$problems; entry $n missing"; continue; }
     path=$(entry_field "$n" "Measurement path")
     view=$(entry_field "$n" "View"); metric=$(entry_field "$n" "Metric"); bench=$(entry_bench "$n")
@@ -52,14 +55,17 @@ step_select() {
   if [ -f "$CW_MEASURE/manifests/plan.json" ]; then verify_manifests; echo "plan already selected and frozen"; return; fi
   [ -f "$REPORTS/baseline-complete.md" ] || [ "${DRY_RUN:-false}" = "true" ] \
     || { echo "ERROR: no complete baseline ($REPORTS/baseline-complete.md) — run Phase 6 until it passes" >&2; exit 1; }
-  local model n
+  local model n earlier=""
   model=$(agent_model "${PHASE7_SELECTION_MODEL:-claude-opus-4.6}")
+  if [ "$FIRST" -gt 1 ]; then
+    earlier=" This is a new round on the same base: optimizations 1–$((FIRST - 1)) were planned and measured in earlier rounds (their plans and reports in integration-test/rounds/, their verdicts in integration-test/reports/ab-comparison-optN.md). Do not repeat them; use what they found."
+  fi
   if [ -f "$PLAN" ] && validate_plan 2> /dev/null; then
     # A rerun after a stop keeps the plan the selection pass already wrote (delete it for a new selection).
     echo "optimization plan already written (kept: $PLAN)"
   elif [ "${DRY_RUN:-false}" = "true" ]; then
     { echo "# Optimization plan (dry-run stub)"; echo
-      for n in $(seq 1 "$MAX_OPT"); do
+      for n in $(seq "$FIRST" "$LAST"); do
         if [ $((n % 2)) -eq 1 ]; then
           printf '## Optimization %s: dry-run-%s\n\n- **Measurement path**: game-frame\n- **View**: %s\n- **Metric**: frame_ms\n\n' \
             "$n" "$n" "${DRY_RUN_VIEW:-landing}"
@@ -69,7 +75,7 @@ step_select() {
         fi
       done; } > "$PLAN"
   else
-    agent_pass "Work on the task described in work/7-select-hotspots.md. Plan exactly $MAX_OPT optimizations in integration-test/optimization-plan.md. Read integration-test/reports/baseline.md (noise and MDE per view and benchmark), integration-test/reports/profiler-summary.md, integration-test/SOURCE-UNDER-INVESTIGATION.md, book/_generated/performance-map.md and the ADRs." \
+    agent_pass "Work on the task described in work/7-select-hotspots.md and constraints/project.md (this project's goals and rules are at its end, under This project). Plan exactly $MAX_OPT optimizations in integration-test/optimization-plan.md, numbered $FIRST to $LAST ('## Optimization $FIRST: …').$earlier Read integration-test/reports/baseline.md (noise and MDE per view and benchmark), integration-test/reports/profiler-summary.md, integration-test/SOURCE-UNDER-INVESTIGATION.md, book/_generated/performance-map.md and the ADRs. $(visual_note)" \
       "$model" proof/7-select.md proof/7-select-session.md || agent_stop
     guard_target_unchanged proof/7-select.md
     restore_framework
@@ -77,7 +83,7 @@ step_select() {
   validate_plan
 
   local new_benches=""
-  for n in $(seq 1 "$MAX_OPT"); do
+  for n in $(seq "$FIRST" "$LAST"); do
     case "$(entry_bench "$n")" in new:*) new_benches="$new_benches $n" ;; esac
   done
   if [ -n "$new_benches" ]; then author_benches $new_benches; fi
@@ -98,7 +104,7 @@ author_benches() {
     echo "benchmarks$names already written (kept)"
   else
     model=$(agent_model "${PHASE7_SELECTION_MODEL:-claude-opus-4.6}")
-    agent_pass "Work on the task described in work/7-author-bench.md. Add these benchmarks to integration-test/bench/:$missing (see their entries in integration-test/optimization-plan.md). Change nothing else." \
+    agent_pass "Work on the task described in work/7-author-bench.md and constraints/project.md. Add these benchmarks to integration-test/bench/:$missing (see their entries in integration-test/optimization-plan.md). Change nothing else." \
       "$model" proof/7-author-bench.md proof/7-author-bench-session.md || agent_stop
     guard_target_unchanged proof/7-author-bench.md
     git checkout -q HEAD -- .github work constraints 2> /dev/null || true
@@ -230,7 +236,7 @@ step_cycle() {
         echo "// dry run $n" >> "src/codeweave-dry-run-$n.txt"
         printf -- '- **Test scopes**: \n- **Summary**: dry run\n' > "$VAL"
       else
-        agent_pass "Work on optimization $n as described in work/7-generate-optimization.md. Its entry is '## Optimization $n' in integration-test/optimization-plan.md. The branch $branch is checked out in ./src; change code there only. Write integration-test/OPTIMIZATION-VALIDATION.md. If that file lists failures from earlier attempts, fix them first. Do not build, run or test anything — the pipeline does that." \
+        agent_pass "Work on optimization $n as described in work/7-generate-optimization.md and constraints/project.md. Its entry is '## Optimization $n' in integration-test/optimization-plan.md. The branch $branch is checked out in ./src; change code there only. Write integration-test/OPTIMIZATION-VALIDATION.md. If that file lists failures from earlier attempts, fix them first. Do not build, run or test anything — the pipeline does that. $(visual_note)" \
           "$model" "$log" "proof/7-opt-$n-generation-session-$iter.md" || agent_stop
       fi
       restore_framework
@@ -293,6 +299,19 @@ step_cycle() {
   fi
   # shellcheck disable=SC1090
   . "$dir/gated"
+  # A resumed cycle may find ./src elsewhere (Phase 8 leaves it on the results branch; a finished optimization
+  # re-measured after its markers were removed). It inspects and commits its own branch, so check that out again.
+  # An uncommitted change that is no longer in ./src cannot be judged: redo the cycle.
+  if [ "$(git -C src symbolic-ref -q --short HEAD)" != "$branch" ]; then
+    local committed
+    committed=$(git -C src rev-parse -q --verify "refs/heads/$branch" || true)
+    if [ -n "$committed" ] && [ "$committed" != "$base_sha" ]; then
+      git -C src checkout -q -f "$branch"
+    else
+      echo "ERROR: ./src is not on $branch and that branch has no committed change; remove $dir/gated to redo optimization $n" >&2
+      exit 1
+    fi
+  fi
 
   if [ "$mpath" = core-bench ] && [ ! -f "$dir/bench-built" ]; then
     timebox 900 bash "$HARNESS/bench.sh" --build --src "$PWD/src" --out "$CW_MEASURE/bench/opt$n" \
@@ -330,8 +349,11 @@ step_cycle() {
       ${base_json:+--baseline "$base_json"} --out "$dir/bench"
     primary="$dir/bench.json"; guard="$dir/game.json"
   fi
-  "$CW_PY" "$CW_TOOLS/image_diff.py" --records "$CW_MEASURE/blocks/opt$n-game/records.json" --out "$dir/visual"
-  grep -q '"visible_change": true' "$dir/visual.json" && caps+=(--cap visible-change)
+  rm -f "$dir/visual.json" "$dir/visual.md" "$REPORTS/visual-opt$n.md"
+  if visual_check_on; then
+    "$CW_PY" "$CW_TOOLS/image_diff.py" --records "$CW_MEASURE/blocks/opt$n-game/records.json" --out "$dir/visual"
+    grep -q '"visible_change": true' "$dir/visual.json" && caps+=(--cap visible-change)
+  fi
   if [ -f "$PATTERNS" ]; then
     "$CW_PY" "$CW_TOOLS/integrity.py" inspect --src src --base "$(state_get BASE_SHA)" --patterns "$PATTERNS" --out "$dir/inspect.json"
     "$CW_PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["tuning_hits"] else 1)' "$dir/inspect.json" && caps+=(--cap tuning-change)
@@ -345,7 +367,7 @@ step_cycle() {
   fi
   cp "$dir/game.md" "$REPORTS/ab-game-opt$n.md"
   [ -f "$dir/bench.md" ] && cp "$dir/bench.md" "$REPORTS/ab-bench-opt$n.md"
-  cp "$dir/visual.md" "$REPORTS/visual-opt$n.md"
+  if [ -f "$dir/visual.md" ]; then cp "$dir/visual.md" "$REPORTS/visual-opt$n.md"; fi
   endgroup
 
   # Commit only the agent's own changes (protected paths are already restored).

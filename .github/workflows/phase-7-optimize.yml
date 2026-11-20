@@ -100,6 +100,11 @@ jobs:
           git config user.email "$GIT_USER_EMAIL"
           git config advice.addIgnoredFile false
 
+      - name: Assemble constraints (profile + project/)
+        run: |
+          set -a; source .github/.env; set +a
+          bash .github/scripts/assemble-constraints.sh "profiles/${CODEWEAVE_PROFILE:-pytorch}" project constraints
+
       - name: Verify runner prerequisites (src/ + venv + source build + v2 baseline)
         id: prereq
         run: |

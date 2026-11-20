@@ -18,7 +18,7 @@ The flow runs as **GHA workflows**: `codeweave.yml` for Phases 1–6; `phase-7-o
 - **Phase 3 Work Definition:** `work/3-generate-harness.md` / `work/3-validate-harness.md` — Performance measurement harness design and validation prompts
 - **Phase 4 Work Definition:** `work/4-generate-tests.md` / `work/4-validate-tests.md` — Integration test code generation and validation prompts
 - **Phase 6 Work Definition:** `work/6-repair-tests.md` — repair agent prompt (fix runtime errors in `tests/` and `_tools/`). Baseline collection itself is deterministic pipeline logic (`run.sh` × N → `ab_compare.py --mode baseline`), not a Copilot prompt
-- **Constraints:** `constraints/project.md` — Repository-specific constraints and requirements (customize for your fork)
+- **Constraints:** `constraints/project.md` — Repository-specific constraints and requirements, generated from `profiles/<CODEWEAVE_PROFILE>/constraints/` plus the fork's own `project/constraints/` (customize those)
 - **Perf Constraints:** `constraints/harness.md` — *(optional)* Target execution constraints for Phase 3 (hardware, scope, time budgets, isolation)
 - **Perf Context:** `constraints/harness-context.md` — *(optional)* Domain context for Phase 3 scenario and observability design (also read by Phase 4 to extract the scenario prompt set)
 - **Proof Directory:** `proof/` — Auto-generated output artifacts from each Copilot run
@@ -135,7 +135,7 @@ These run after Phase 4 produces `tests-complete.md`. In GHA they span the main 
 - External repository cloned into `src` (shallow, single branch)
 - Work branch created to isolate changes from the original branch
 - `src/` and `tools/` directories are git-excluded via `.git/info/exclude` to avoid polluting history
-- Prompt files live in `work/`, constraint files in `constraints/`; README.md stays at repo root
+- Prompt files live in `work/`; constraint files in `profiles/<name>/constraints/` and `project/constraints/`, assembled into `constraints/` (git-ignored); README.md stays at repo root
 - `integration-test/` is created by Phase 3 at repo root
 - `agent-state/` is created by Phase 1 at repo root of the target repo; holds AI working-state files (plan, quality-review, etc.)
 
@@ -167,10 +167,10 @@ Edit the relevant per-phase reusable workflow (`.github/workflows/phase-*.yml`);
 Edit the relevant file under `work/` directly. Changes take effect on the next workflow run.
 
 ### Add or Update Performance Constraints
-Edit `constraints/harness.md` before running Phase 3. Phase 3 reads this file and incorporates its constraints into `integration-test/SOURCE-UNDER-INVESTIGATION.md`.
+Add `project/constraints/harness.md` before running Phase 3 (or edit the profile's, `profiles/<CODEWEAVE_PROFILE>/constraints/harness.md`, for every target of that type). Phase 3 reads `constraints/harness.md` and incorporates its constraints into `integration-test/SOURCE-UNDER-INVESTIGATION.md`.
 
 ### Customize for Your Fork
-Edit `constraints/project.md` to replace the sample constraint with your repository-specific requirements (e.g., framework versions, architecture decisions, tech stack limitations).
+`constraints/` is generated (git-ignored) at the start of every job by `.github/scripts/assemble-constraints.sh`: the profile's files (`CODEWEAVE_PROFILE` in `.github/.env`, default `pytorch`; a profile may build on another via `PROFILE_BASE` in its `profile.env`, e.g. `unity` on `rendering`, whose files come first) with your fork's own files from `project/constraints/` appended under "This project" — where the two differ, yours win. Put your repository-specific requirements (e.g., framework versions, architecture decisions, tech stack limitations) in `project/constraints/project.md`.
 
 ### Adjust Iteration Settings
 Edit `.github/codeweave.config`:
@@ -221,7 +221,7 @@ Edit `.github/codeweave.config`:
 | `integration-test/reports/profiler-summary.md` | Ranked hotspot report — the §08 hotspot-report contract (location + self time + call count, ranked by self time); required Phase 6 output, primary Phase 7 hotspot input |
 | `.github/workflows/phase-7-optimize.yml` | Phase 7 optimization cycle (auto-chaining) |
 | `.github/workflows/phase-8-report.yml` | Phase 8 aggregate report workflow |
-| `constraints/project.md` | Repository-specific constraints and requirements (customize for your fork) |
+| `constraints/project.md` | Generated: the profile's constraints plus `project/constraints/project.md` (customize that in your fork) |
 | `constraints/harness.md` | *(optional)* Target execution constraints (hardware, scope, time budgets) consumed by Phase 3 |
 | `constraints/harness-context.md` | *(optional)* Domain context for Phase 3 scenario and observability design (also read by Phase 4) |
 | `.git/info/exclude` | Excludes `src/` and `tools/` from git tracking (auto-configured by workflow) |
@@ -253,8 +253,9 @@ For a single manual Copilot iteration:
 1. Manually clone the external repo: `git clone --depth 1 --branch <branch> <url> src`
 2. Create and checkout work branch: `cd src && git checkout -b <work-branch>`
 3. Source the config file: `source ../.github/codeweave.config`
-4. Run a single generate pass: `copilot -p "Work on the task described in work/1-generate-book.md and constraints/project.md." --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --no-ask-user`
-5. Review changes: `git diff`, `git status`
+4. Assemble the constraints: `bash .github/scripts/assemble-constraints.sh profiles/${CODEWEAVE_PROFILE:-pytorch} project constraints`
+5. Run a single generate pass: `copilot -p "Work on the task described in work/1-generate-book.md and constraints/project.md." --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --no-ask-user`
+6. Review changes: `git diff`, `git status`
 
 ## Important Notes
 

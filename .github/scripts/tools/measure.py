@@ -236,7 +236,7 @@ def main():
     ap.add_argument("--entry")
     ap.add_argument("--pairs", type=int, default=6)
     ap.add_argument("--order", choices=["ABBA", "BAAB"], default="ABBA")
-    ap.add_argument("--window", default=os.environ.get("GAME_WINDOW", ""))
+    ap.add_argument("--window", default=os.environ.get("APP_WINDOW") or os.environ.get("GAME_WINDOW", ""))
     ap.add_argument("--heat-soak", type=int, default=180)
     ap.add_argument("--warmups", type=int, default=1)
     ap.add_argument("--retries", type=int, default=2)

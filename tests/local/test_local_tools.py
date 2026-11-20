@@ -227,6 +227,116 @@ class IntegrityTest(unittest.TestCase):
         (ws / "h" / "run.sh").write_text("b\n")
         self.assertEqual(run(TOOLS / "integrity.py", "verify", "--root", ws, "--manifest", tmp / "m.json", ok=(1,)).returncode, 1)
 
+    def test_project_patterns_add_and_remove(self):
+        tmp = Path(tempfile.mkdtemp())
+        pats = tmp / "pats"
+        # the profile's lines, then the project's: one added, one of the profile's removed
+        pats.write_text("protected\ttools/*\ntuning\t*.shader\n"
+                        "# ---- this project ----\nprotected\tSaves/*\n-tuning\t*.shader\n")
+        out = run(TOOLS / "integrity.py", "patterns", "--patterns", pats).stdout
+        self.assertIn("2 protected, 0 tuning, 0 sensitive (1 removed by the project)", out)
+        sys.path.insert(0, str(TOOLS))
+        import integrity
+        self.assertEqual(integrity.load_patterns(pats)["protected"], ["tools/*", "Saves/*"])
+        # removing a pattern that is not there is a mistake (e.g. a typo), not a silent no-op
+        pats.write_text("tuning\t*.shader\n-tuning\t*.shadr\n")
+        run(TOOLS / "integrity.py", "patterns", "--patterns", pats, ok=(1,))
+
+
+class AssembleConstraintsTest(unittest.TestCase):
+    SCRIPT = TOOLS.parent / "assemble-constraints.sh"
+
+    def assemble(self, profile, project, out):
+        r = subprocess.run(["bash", str(self.SCRIPT), str(profile), str(project), str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_project_rules_are_added_after_the_profile(self):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "prof" / "constraints").mkdir(parents=True)
+        (tmp / "prof" / "constraints" / "project.md").write_text("# Unity\n\nNever GPU time.\n")
+        (tmp / "prof" / "constraints" / "harness.md").write_text("# Harness\n")
+        (tmp / "proj" / "constraints").mkdir(parents=True)
+        (tmp / "proj" / "constraints" / "project.md").write_text("Frame cost matters most.\n")
+        (tmp / "proj" / "constraints" / "extra.md").write_text("Extra.\n")
+        out = tmp / "ws" / "constraints"
+        (out).mkdir(parents=True); (out / "stale.md").write_text("old\n")
+        msg = self.assemble(tmp / "prof", tmp / "proj", out)
+        merged = (out / "project.md").read_text()
+        self.assertTrue(merged.startswith("# Unity\n\nNever GPU time.\n"))
+        self.assertLess(merged.index("Never GPU time."), merged.index("# This project"))
+        self.assertLess(merged.index("# This project"), merged.index("Frame cost matters most."))
+        self.assertEqual((out / "harness.md").read_text(), "# Harness\n")
+        self.assertEqual((out / "extra.md").read_text(), "Extra.\n")
+        self.assertFalse((out / "stale.md").exists())
+        self.assertIn("project.md(+)", msg)
+        # a second run gives the same files (no rules added twice)
+        self.assemble(tmp / "prof", tmp / "proj", out)
+        self.assertEqual((out / "project.md").read_text(), merged)
+
+    def test_profile_only(self):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "prof" / "constraints").mkdir(parents=True)
+        (tmp / "prof" / "constraints" / "project.md").write_text("Rules.\n")
+        self.assemble(tmp / "prof", tmp / "no-such-project", tmp / "out")
+        self.assertEqual((tmp / "out" / "project.md").read_text(), "Rules.\n")
+
+    def test_every_profile_has_constraints(self):
+        profiles = TOOLS.parents[2] / "profiles"
+        for p in ("generic", "rendering", "unity", "pytorch"):
+            self.assertTrue((profiles / p / "constraints" / "project.md").is_file(), p)
+
+    @staticmethod
+    def profile(root, name, base=None, text=None):
+        (root / name / "constraints").mkdir(parents=True)
+        (root / name / "constraints" / "project.md").write_text(text or f"# {name}\n")
+        if base:
+            (root / name / "profile.env").write_text(f"# settings\nPROFILE_BASE={base}   # builds on it\n")
+        return root / name
+
+    def test_profile_builds_on_its_base(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.profile(tmp / "profiles", "rendering")
+        (tmp / "profiles" / "rendering" / "constraints" / "harness.md").write_text("# Measuring\n")
+        engine = self.profile(tmp / "profiles", "engine", base="rendering")
+        (tmp / "proj" / "constraints").mkdir(parents=True)
+        (tmp / "proj" / "constraints" / "project.md").write_text("Owner's goals.\n")
+        msg = self.assemble(engine, tmp / "proj", tmp / "out")
+        merged = (tmp / "out" / "project.md").read_text()
+        self.assertTrue(merged.startswith("# rendering\n"))
+        self.assertLess(merged.index("# rendering"), merged.index("# engine"))
+        self.assertLess(merged.index("# engine"), merged.index("# This project"))
+        self.assertLess(merged.index("# This project"), merged.index("Owner's goals."))
+        self.assertEqual((tmp / "out" / "harness.md").read_text(), "# Measuring\n")   # only the base has it
+        self.assertIn("profile rendering+engine; project: project.md(+)", msg)
+
+    def test_unknown_base_or_cycle_fails(self):
+        tmp = Path(tempfile.mkdtemp())
+        lost = self.profile(tmp / "profiles", "lost", base="no-such-profile")
+        self.profile(tmp / "profiles", "a", base="b")
+        b = self.profile(tmp / "profiles", "b", base="a")
+        for prof in (lost, b):
+            r = subprocess.run(["bash", str(self.SCRIPT), str(prof), str(tmp / "proj"), str(tmp / "out")],
+                               capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0, prof)
+            self.assertIn("ERROR", r.stderr)
+
+    def test_unity_builds_on_rendering(self):
+        profiles = TOOLS.parents[2] / "profiles"
+        lib = TOOLS.parent / "lib" / "profiles.sh"
+        r = subprocess.run(["bash", "-c", f'source "{lib}"; profile_chain_names "{profiles / "unity"}";'
+                            f' profile_setting "{profiles / "rendering"}" VISUAL_CHECK;'
+                            f' profile_setting "{profiles / "generic"}" VISUAL_CHECK'],
+                           capture_output=True, text=True, check=True)
+        self.assertEqual(r.stdout.split("\n")[:3], ["rendering+unity", "on", ""])
+        # the shared Phase 3–8 prompts live in rendering; unity adds rules, hooks and patterns only
+        self.assertTrue((profiles / "rendering" / "work" / "7-select-hotspots.md").is_file())
+        self.assertFalse((profiles / "unity" / "work").exists())
+        for f in (profiles / "rendering").rglob("*"):
+            if f.is_file() and f.suffix in (".md", ".sh", ".tsv"):
+                self.assertNotRegex(f.read_text(), r"\bUnity(?! profile|\)| —)|asmdef|IL2CPP|MonoBehaviour", f)
+
 
 class MeasureTest(unittest.TestCase):
     """measure.py with a fake harness whose run.sh fails for artefacts named *broken*."""

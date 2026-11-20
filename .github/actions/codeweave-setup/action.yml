@@ -34,6 +34,13 @@ runs:
         git config user.email "$GIT_USER_EMAIL"
         git config advice.addIgnoredFile false
 
+    - name: Assemble constraints (profile + project/)
+      shell: bash
+      run: |
+        # constraints/ (git-ignored) = profiles/<CODEWEAVE_PROFILE>/constraints/ with this
+        # repository's own rules from project/constraints/ added under "This project".
+        bash .github/scripts/assemble-constraints.sh "profiles/${CODEWEAVE_PROFILE:-pytorch}" project constraints
+
     - name: Install Claude Code CLI (AGENT_CLI=claude)
       if: env.AGENT_CLI == 'claude'
       shell: bash

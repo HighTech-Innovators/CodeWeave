@@ -38,8 +38,8 @@ step_iterate() {
   LOOP_MARKER="$HARNESS/harness-complete.md"
   LOOP_REPORT="$HARNESS/HARNESS-VALIDATION.md"
   LOOP_LOG="3-harness"
-  LOOP_GEN_PROMPT="Work on the task described in work/3-generate-harness.md and constraints/project.md. Read constraints/harness-contract.md, constraints/harness.md and constraints/harness-context.md. Analyse ./src using ./book (index: book/BOOK-INDEX.md), the ADRs (index: src/codeweave-results/ADR-INDEX.md) and ./integration-test as reference."
-  LOOP_VAL_PROMPT="Validate the harness design as described in work/3-validate-harness.md, constraints/project.md and constraints/harness.md. Do not modify the three harness documents."
+  LOOP_GEN_PROMPT="Work on the task described in work/3-generate-harness.md and constraints/project.md. Read constraints/harness-contract.md, constraints/harness.md and constraints/harness-context.md. Analyse ./src using ./book (index: book/BOOK-INDEX.md), the ADRs (index: src/codeweave-results/ADR-INDEX.md) and ./integration-test as reference. $(visual_note)"
+  LOOP_VAL_PROMPT="Validate the harness design as described in work/3-validate-harness.md, constraints/project.md and constraints/harness.md. Do not modify the three harness documents. $(visual_note)"
   LOOP_HOOK=""
   gen_validate_loop
 }
