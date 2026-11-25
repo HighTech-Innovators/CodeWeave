@@ -37,7 +37,7 @@ evidence). The progress of each pass streams to the terminal and to `proof/`; th
 transcript is in `proof/*-session-N.md`, and the session can be reopened with
 `claude --resume <session id>` (the id is on the first line of the pass's log).
 
-Models: the schedules in `.github/.env` use Copilot names (`claude-opus-4.6`, …). Under
+Models: the schedules in `.github/codeweave.config` use Copilot names (`claude-opus-4.6`, …). Under
 Claude Code they become the family alias (`opus`, `sonnet`, `haiku`), which is always the
 newest model of that family. Set your own schedule in `target.env` with aliases or full
 model IDs, e.g. `PHASE1_MODEL_SCHEDULE=opus:1,sonnet`. `AGENT_EFFORT=high` (low … max)
@@ -71,7 +71,7 @@ Everything lives in `$CODEWEAVE_RUNS_DIR` (default `~/codeweave-runs`):
 
 ```
 ~/codeweave-runs/my-game/
-  target.env        this target's settings (overrides .github/.env), incl. AGENT_CLI, CHECKPOINTS
+  target.env        this target's settings (overrides .github/codeweave.config), incl. AGENT_CLI, CHECKPOINTS
   constraints/      optional: this project's own rules for the agents (added to the profile's)
   integrity-patterns.tsv  optional: files to protect or flag, added to the profile's
   harness/          optional: your own harness files (override the generated ones)
@@ -120,7 +120,7 @@ base's), and `profile.env` settings override the base's. The chain in effect is 
 at the start of each run (`constraints: profile rendering+unity`). A new engine (e.g.
 Unreal) is a new folder with `PROFILE_BASE=rendering` and only what differs.
 
-**Settings** are read in this order, later ones winning: `.github/.env`, the profile
+**Settings** are read in this order, later ones winning: `.github/codeweave.config`, the profile
 chain's `profile.env` files, then the target's `target.env`.
 
 **Project rules are added, not swapped in.** Each run builds `workspace/constraints/`
@@ -250,7 +250,7 @@ Logs and agent session transcripts for every pass are in `workspace/proof/`.
 
 ## Settings
 
-Edit `target.env` to override anything from `.github/.env`, e.g. iterations, models,
+Edit `target.env` to override anything from `.github/codeweave.config`, e.g. iterations, models,
 `PHASE7_MAX_OPTIMIZATIONS`, `APP_WINDOW` (window size for measurements in a window; `GAME_WINDOW` is its older name and still works), `VISUAL_CHECK` (the rendered-output check, on/off),
 `MEASURE_PAIRS`, `MEASURE_HEAT_SOAK`, `MEASURE_MAX_THERMAL`, `MEASURE_READY_WAIT`,
 `MEASURE_MIN_FREE_GB` (free disk the readiness check asks for, default 15), `CHECKPOINTS`. Put the

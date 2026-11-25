@@ -63,7 +63,7 @@ jobs:
 
       - name: Assemble constraints (profile + project/)
         run: |
-          set -a; source .github/.env; set +a
+          set -a; source .github/codeweave.config; set +a
           bash .github/scripts/assemble-constraints.sh "profiles/${CODEWEAVE_PROFILE:-pytorch}" project constraints
 
       - name: Verify Phase 7 results exist

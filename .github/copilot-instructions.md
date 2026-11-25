@@ -170,7 +170,7 @@ Edit the relevant file under `work/` directly. Changes take effect on the next w
 Add `project/constraints/harness.md` before running Phase 3 (or edit the profile's, `profiles/<CODEWEAVE_PROFILE>/constraints/harness.md`, for every target of that type). Phase 3 reads `constraints/harness.md` and incorporates its constraints into `integration-test/SOURCE-UNDER-INVESTIGATION.md`.
 
 ### Customize for Your Fork
-`constraints/` is generated (git-ignored) at the start of every job by `.github/scripts/assemble-constraints.sh`: the profile's files (`CODEWEAVE_PROFILE` in `.github/.env`, default `pytorch`; a profile may build on another via `PROFILE_BASE` in its `profile.env`, e.g. `unity` on `rendering`, whose files come first) with your fork's own files from `project/constraints/` appended under "This project" — where the two differ, yours win. Put your repository-specific requirements (e.g., framework versions, architecture decisions, tech stack limitations) in `project/constraints/project.md`.
+`constraints/` is generated (git-ignored) at the start of every job by `.github/scripts/assemble-constraints.sh`: the profile's files (`CODEWEAVE_PROFILE` in `.github/codeweave.config`, default `pytorch`; a profile may build on another via `PROFILE_BASE` in its `profile.env`, e.g. `unity` on `rendering`, whose files come first) with your fork's own files from `project/constraints/` appended under "This project" — where the two differ, yours win. Put your repository-specific requirements (e.g., framework versions, architecture decisions, tech stack limitations) in `project/constraints/project.md`.
 
 ### Adjust Iteration Settings
 Edit `.github/codeweave.config`:

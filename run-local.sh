@@ -18,7 +18,7 @@
 # the same phase is run again.
 #
 # Each target gets a run folder in $CODEWEAVE_RUNS_DIR (default ~/codeweave-runs):
-#   <name>/target.env        this target's settings; overrides anything in .github/.env
+#   <name>/target.env        this target's settings; overrides anything in .github/codeweave.config
 #   <name>/constraints/      optional: this project's own rules (project.md, …), added to the
 #                            profile's files of the same name; they win where the two differ
 #   <name>/integrity-patterns.tsv  optional: paths to protect or flag, added to the profile's
@@ -40,7 +40,7 @@
 # the repository has shaders or a *.uproject (and asks, when run in a terminal),
 # and `generic` otherwise; --profile overrides.
 #
-# Settings are read in this order, later ones winning: .github/.env, the profile
+# Settings are read in this order, later ones winning: .github/codeweave.config, the profile
 # chain's profile.env files (e.g. rendering, then unity), the target's target.env.
 #
 # Agent: `claude` (Claude Code CLI, the default for local runs) or `copilot`
@@ -77,7 +77,7 @@ profile_name() {
   esac
 }
 
-# load_env DIR — .github/.env, the profile chain's settings, then the target's overrides,
+# load_env DIR — .github/codeweave.config, the profile chain's settings, then the target's overrides,
 # into the environment. target.env is read first to learn the profile, and again last so
 # it wins over the profile's settings.
 load_env() {
@@ -85,7 +85,7 @@ load_env() {
   [ -f "$1/target.env" ] || die "no target at $1 — create it with: $0 init <name> <path-to-repo>"
   set -a
   # shellcheck disable=SC1091
-  . "$CW_ROOT/.github/.env"
+  . "$CW_ROOT/.github/codeweave.config"
   # shellcheck disable=SC1090
   . "$1/target.env"
   set +a
@@ -277,8 +277,8 @@ EOF
   git init --quiet "$dir/workspace"
 
   cat > "$dir/target.env" <<EOF
-# CodeWeave local target "$name". run-local.sh reads .github/.env first, then
-# this file, so any setting from .github/.env can be overridden here.
+# CodeWeave local target "$name". run-local.sh reads .github/codeweave.config first, then
+# this file, so any setting from .github/codeweave.config can be overridden here.
 SOURCE_REPO_PATH="$repo"
 CODEWEAVE_PROFILE=$profile
 
@@ -302,7 +302,7 @@ CHECKPOINTS="4 6"
 
 # Examples of overrides. With claude, model names can be aliases (opus, sonnet,
 # haiku: the newest model of that family) or full IDs; the Copilot names in
-# .github/.env are mapped to the alias of the same family.
+# .github/codeweave.config are mapped to the alias of the same family.
 # PHASE1_MAX_ITERATIONS=6
 # PHASE1_MODEL_SCHEDULE=opus:1,sonnet
 # PHASE2_MODEL_SCHEDULE=sonnet

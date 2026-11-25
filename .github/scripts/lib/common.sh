@@ -42,7 +42,7 @@ resolve_model() {
 
 # --- Coding agent --------------------------------------------------------------
 # AGENT_CLI picks the CLI that runs each pass: `copilot` (GitHub Copilot CLI) or
-# `claude` (Claude Code CLI, headless). Set it in .github/.env or a target.env.
+# `claude` (Claude Code CLI, headless). Set it in .github/codeweave.config or a target.env.
 AGENT_CLI="${AGENT_CLI:-copilot}"
 CW_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -106,15 +106,16 @@ claude_pass() {
   return "${status[1]}"
 }
 
-# copilot_pass PROMPT MODEL LOG SESSION — one non-interactive Copilot pass with
-# the Phase 1–4 tool allowance (read/write/edit/create, no shell). Returns
+# copilot_pass PROMPT MODEL LOG SESSION — one non-interactive Copilot pass. Tool
+# allowance: on GitHub Actions (Phases 1–2) every tool except git, as in the Phase 3–4
+# workflows — the pipeline owns all commits; in local runs read/write/edit/create only,
+# no shell — the pipeline builds, runs and measures everything itself. Returns
 # Copilot's exit status; the caller decides whether a failure is fatal.
 copilot_pass() {
+  local tools=(--allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create')
+  [ "${GITHUB_ACTIONS:-}" = true ] && tools=(--allow-all-tools --deny-tool='shell(git:*)')
   copilot -p "$1" \
-    --allow-tool='read' \
-    --allow-tool='write' \
-    --allow-tool='edit' \
-    --allow-tool='create' \
+    "${tools[@]}" \
     --model="$2" \
     --no-ask-user \
     --share="$4" \

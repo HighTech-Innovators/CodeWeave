@@ -3,7 +3,7 @@
 #
 # One subcommand per workflow step, so GitHub Actions (phase-1-book.yml) and
 # run-local.sh run the same code. Run from the outer repository root with
-# .github/.env (plus any local overrides) loaded into the environment.
+# .github/codeweave.config (plus any local overrides) loaded into the environment.
 #
 #   clone    clone the target into src/ and create the work branch
 #   iterate  generate → validate loop       outputs: manuscript_complete, iterations_run

@@ -3,7 +3,7 @@
 #
 # One subcommand per workflow step, so GitHub Actions (phase-2-adr.yml) and
 # run-local.sh run the same code. Run from the outer repository root with
-# .github/.env (plus any local overrides) loaded into the environment.
+# .github/codeweave.config (plus any local overrides) loaded into the environment.
 #
 # Everything Phase 2 writes into the target goes under src/codeweave-results/:
 #   adr/<source dir>/ADR.md   one ADR per architectural unit (mirrors the source tree)

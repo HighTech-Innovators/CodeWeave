@@ -246,7 +246,9 @@ What remains experimental is portability across a wide range of targets. The man
 
 Some behavior is manual by design. Phase 8 drafts pull requests but does not open them, and INVESTIGATE results are surfaced rather than acted on.
 
-Several limitations are worth stating plainly. The pipeline requires a self-hosted, persistent runner, because the later phases reuse the build and the build environment in place and there is no ephemeral-runner path. It requires GitHub Copilot CLI access and two fine-grained tokens. Energy and carbon are measured and reported but do not gate individual verdicts, because their per-change resolution is too coarse. The model and CI cost scales with the iteration caps and the number of optimizations. There are no published benchmark results yet; the first public run should include both the measurements and the surrounding proof artifacts.
+The local runner is newer still: its Phases 3–8 have been driven end to end on one Unity game so far.
+
+Several limitations are worth stating plainly. On GitHub Actions, the pipeline requires a self-hosted, persistent runner, because the later phases reuse the build and the build environment in place and there is no ephemeral-runner path. It requires GitHub Copilot CLI access and two fine-grained tokens. Energy and carbon are measured and reported but do not gate individual verdicts, because their per-change resolution is too coarse. The model and CI cost scales with the iteration caps and the number of optimizations. There are no published benchmark results yet; the first public run should include both the measurements and the surrounding proof artifacts.
 
 > **Maturity note.** Treat CodeWeave as a research-grade automation harness. Review every drafted pull request and read the `proof/` trail before shipping anything it produces.
 
