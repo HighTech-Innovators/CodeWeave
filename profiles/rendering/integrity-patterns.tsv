@@ -1,0 +1,24 @@
+# What an optimization agent may not touch (protected, always restored), what it may
+# touch but caps a KEEP at INVESTIGATE (tuning), and added source lines that hint the
+# change affects measuring rather than the application (sensitive, regular expressions).
+# Format: kind<TAB>pattern. Paths are relative to the target root; `*` crosses folders.
+# Engine profiles (e.g. unity) add their own lines after these; `-kind<TAB>pattern` there
+# or in a project's file removes one of these.
+protected	codeweave-results/*
+protected	docs/*
+protected	*/Tests/*
+protected	*Tests/*
+protected	*AutoTest*
+protected	*SelfTest*
+protected	*Selftest*
+tuning	*.shader
+tuning	*.hlsl
+tuning	*.compute
+tuning	*.glsl
+tuning	*.metal
+tuning	*.wgsl
+tuning	*.frag
+tuning	*.vert
+sensitive	[Vv][Ss]ync
+sensitive	[Tt]arget[Ff]rame[Rr]ate|[Mm]ax[Ff][Pp][Ss]
+sensitive	Automated|AutoTest|SelfTest|Selftest

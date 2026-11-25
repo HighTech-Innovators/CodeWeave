@@ -195,7 +195,7 @@ jobs:
             fi
 
             if [ "$PHASE2_ADR_INDEX_BUILT" = "1" ]; then
-              echo "ADR Index: Generated and pushed (src/ADR-INDEX.md)."
+              echo "ADR Index: Generated and pushed (src/codeweave-results/ADR-INDEX.md)."
             fi
 
             if [ "$PHASE3_RESULT" = "skipped" ]; then

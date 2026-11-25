@@ -2,7 +2,7 @@
 
 > See `constraints/project.md` for repository-specific constraints.
 > Git commits are handled externally — do not commit.
-> **If `./src/ADR-VALIDATION.md` exists: read it before doing anything else. Address every item listed under Required Actions. Do not re-litigate items marked PASS. Do not write `adrs-complete.md` yourself — the validator does this.**
+> **If `./src/codeweave-results/ADR-VALIDATION.md` exists: read it before doing anything else. Address every item listed under Required Actions. Do not re-litigate items marked PASS. Do not write `adrs-complete.md` yourself — the validator does this.**
 
 A technical book has been generated in `./book`. Its markdown sources contain deep architectural understanding of the codebase in `./src`. Use these as your primary reference when writing ADRs. If `book.pdf` is present at the repository root, use it as additional context.
 
@@ -17,10 +17,14 @@ Generate a localized Architecture Decision Record (ADR) for every architectural 
 Each ADR file must be placed at:
 
 ```
-./src/<folder>/ADR.md
+./src/codeweave-results/adr/<folder>/ADR.md
 ```
 
+where `<folder>` is the source directory's path relative to `./src` — the ADR tree mirrors the source tree. For example, the ADR for `./src/c10/core` is `./src/codeweave-results/adr/c10/core/ADR.md`.
+
 For nested subsystems, create ADRs at the appropriate subfolder level where a meaningful architectural boundary exists. You do not need to create an ADR for every leaf folder — only for folders that represent a coherent architectural unit.
+
+**Write only inside `./src/codeweave-results/`.** Never create, edit, or move files anywhere else in `./src` — not next to the source, not in the target's own documentation folders (e.g. an existing `docs/adr/`). The pipeline undoes every change outside `./src/codeweave-results/` after each pass. When you enumerate or read `./src`, skip `./src/codeweave-results/` itself: it is CodeWeave output, not source.
 
 ---
 
@@ -84,7 +88,7 @@ If this directory has no externally callable interface (e.g. it is a pure implem
 
 ## Dependencies
 
-List components this directory depends on and components that depend on it. If a component has an ADR (i.e. it is COVERED in `adr-scope.md`), link to it using its path relative to `src/` — **not a relative `../` path**.
+List components this directory depends on and components that depend on it. If a component has an ADR (i.e. it is COVERED in `adr-scope.md`), link to it by its source directory path followed by `/ADR.md` — the path relative to the ADR root `./src/codeweave-results/adr/` — **not a relative `../` path**.
 
 | Component | Direction | Nature |
 |---|---|---|
@@ -93,7 +97,7 @@ List components this directory depends on and components that depend on it. If a
 
 Direction values: `depends-on`, `depended-on-by`, or `mutual`.
 
-The link format must always be `[label](path/from/src/root/ADR.md)` — never `[label](../../path/ADR.md)`. C++ internal modules with no ADR (e.g. `torch._C.*`) should be listed by name without a link.
+The link format must always be `[label](source/dir/path/ADR.md)` — never `[label](../../path/ADR.md)`. Internal modules with no ADR (e.g. `torch._C.*`, or a third-party package) should be listed by name without a link.
 
 If there are no notable dependencies in either direction, state that explicitly. Do not leave the table empty without explanation.
 
@@ -136,11 +140,13 @@ If `./book/_generated/architecture-map.md` exists, read it. It contains a pre-cl
 
 **Enumerate at two depths only — do not recurse further by default.**
 
-The goal is to document architectural decisions, not every implementation folder. A codebase like PyTorch has dozens of architectural units worth documenting and hundreds of implementation-detail subdirectories that do not need their own ADR. Going too deep produces noise that makes the output unusable as downstream context.
+The goal is to document architectural decisions, not every implementation folder. A large codebase has dozens of architectural units worth documenting and hundreds of implementation-detail subdirectories that do not need their own ADR. Going too deep produces noise that makes the output unusable as downstream context.
+
+**If `constraints/project.md` says where the architectural units of this kind of project live** (for example: "one unit per assembly definition and per feature folder under the code root"), follow it. It overrides the depth defaults below; the classification rules and statuses stay the same.
 
 **Step A — Depth 1: direct children of `./src`**
 ```
-find ./src -maxdepth 1 -type d -not -path '*/.*' | sort
+find ./src -maxdepth 1 -type d -not -path '*/.*' -not -path './src/codeweave-results' | sort
 ```
 Classify every result. Every depth-1 directory **must** appear explicitly in `adr-scope.md`.
 
@@ -151,7 +157,9 @@ find ./src/<dir> -maxdepth 1 -type d -not -path '*/.*' | sort
 ```
 Classify the results. Write ADRs for depth-2 directories that contain source files and represent a coherent architectural unit.
 
-**Stop here.** Do not enumerate depth-3+ directories. Any subdirectory of a `COVERED` directory is implicitly covered by the validator — you do not need to add entries for it and the validator will not require them. A large repository like PyTorch has hundreds of implementation-detail subdirectories; enumerating them defeats the purpose of the scope map.
+**Pass-through containers do not use up depth.** A directory that only groups other directories and has no architecture of its own — a source root such as `./src/main/java`, or `./Assets` in a Unity project — is classified `PASS-THROUGH`. Enumerate its direct children as if they sat one level higher, and classify each of them. A PASS-THROUGH directory gets no ADR, and it neither covers nor excludes anything below it.
+
+**Stop here.** Do not enumerate depth-3+ directories (depth counted with PASS-THROUGH directories skipped). Any subdirectory of a `COVERED` directory is implicitly covered by the validator — you do not need to add entries for it and the validator will not require them. A large repository like PyTorch has hundreds of implementation-detail subdirectories; enumerating them defeats the purpose of the scope map.
 
 **Parent ADR covers implementation details.** Once you write an ADR for a directory, all of its subdirectories are covered — do not add them to `adr-scope.md`. Never add a depth-3+ directory to the scope map, even if it appears in a book chapter.
 
@@ -162,25 +170,27 @@ Classify the results. Write ADRs for depth-2 directories that contain source fil
 
 **Never enumerate the children of an EXCLUDED directory.**
 
-For every directory you do enumerate, determine whether it contains source files (`.py`, `.cpp`, `.h`, `.cu`, `.cc`, `.cxx`, `.hpp`, `.ts`, `.js`, `.kt`, `.java`). Directories with no source files may be excluded without justification.
+For every directory you do enumerate, determine whether it contains source files (`.py`, `.cpp`, `.h`, `.cu`, `.cc`, `.cxx`, `.hpp`, `.ts`, `.js`, `.kt`, `.java`, `.cs`, `.shader`, `.hlsl`, `.compute`, `.cginc`, `.rs`, `.go`, `.swift`, `.m`, `.mm`). Directories with no source files may be excluded without justification.
 
-Write `./src/adr-scope.md` with a table covering every directory you have enumerated:
+Write `./src/codeweave-results/adr-scope.md` with a table covering every directory you have enumerated:
 
 ```markdown
 # ADR Scope
 
-| Directory | Source files present | Status | Reason (if EXCLUDED) |
+| Directory | Source files present | Status | Reason (if EXCLUDED or PASS-THROUGH) |
 |---|---|---|---|
 | ./torch/_prims | yes | PENDING | |
 | ./cmake | no | EXCLUDED | Build/config only |
 | ./test | yes | EXCLUDED | Test suite |
 | ./third_party | yes | EXCLUDED | Vendored/third-party |
+| ./Assets | yes | PASS-THROUGH | Container: groups the game's code and content folders |
 ```
 
 Status values:
 - `PENDING` — source files present, no ADR yet
-- `COVERED` — source files present, ADR.md exists and is non-stub
+- `COVERED` — source files present, `./src/codeweave-results/adr/<dir>/ADR.md` exists and is non-stub
 - `EXCLUDED` — no ADR will be written; **reason is mandatory**
+- `PASS-THROUGH` — container only; its direct children are classified individually; **reason is mandatory** (`Container: <what it groups>`)
 
 **Acceptable exclusion reasons** (use these exact terms or closely equivalent ones):
 - `Auto-generated code` — files produced by a code generator, not hand-authored
@@ -190,6 +200,7 @@ Status values:
 - `Test suite` — test code; the directory exists to test other components, not to define architecture
 - `Empty or stub` — directory exists but contains no meaningful source
 - `Leaf with no architectural boundary` — folder is a pure implementation detail fully covered by a parent ADR; use this for depth-2 directories that are simple file groupings with no independent architectural role
+- `Content/data only` — art, audio, scenes, prefabs, documentation, or other non-code content; no hand-authored logic
 
 **Not acceptable as an exclusion reason:**
 - A directory mentioned by name in any book chapter as an architectural unit
@@ -214,7 +225,7 @@ Update `adr-scope.md` to reflect any changes. This step prevents subsystems the 
 For each directory with status `PENDING` in `adr-scope.md`:
 - Inspect the source files
 - Cross-reference the book sources for architectural context
-- Write or update `ADR.md` following the ADR Structure above
+- Write or update `./src/codeweave-results/adr/<dir>/ADR.md` following the ADR Structure above
 - Update the directory's status in `adr-scope.md` to `COVERED`
 
 **When updating an existing ADR:** replace the entire file — do not append sections to it. If a `## Key Files` section already exists in bullet-list form, replace the whole file with the correct structure rather than adding a second `## Key Files` table.
@@ -224,7 +235,7 @@ An ADR is **not COVERED** until:
 - Second section is a bare bullet list linking to all 7 sections (no heading)
 - `## Key Files` appears exactly once and contains a table with at least 1 real file path
 - `## Dependencies` table has at least 1 row, or states explicitly that there are none
-- All dependency links use src-root paths (`c10/core/ADR.md`), never `../` traversals
+- All dependency links use ADR-root paths (`c10/core/ADR.md`), never `../` traversals
 - `## Runtime Behaviour` and `## Performance Profile` each contain at least 2 sentences grounded in source
 
 An ADR consisting only of headings or one-liners is a stub and must be completed.
@@ -235,7 +246,7 @@ If you cannot write a full ADR in the current iteration, leave the status as `PE
 
 When all directories in `adr-scope.md` are either `COVERED` or `EXCLUDED` (no `PENDING` entries remain), stop writing ADRs. Update `adr-scope.md` to reflect the final state.
 
-The validator will independently verify coverage and write `./src/adrs-complete.md` if all checks pass. **Do not write `adrs-complete.md` yourself.**
+The validator will independently verify coverage and write `./src/codeweave-results/adrs-complete.md` if all checks pass. **Do not write `adrs-complete.md` yourself.**
 
 ---
 

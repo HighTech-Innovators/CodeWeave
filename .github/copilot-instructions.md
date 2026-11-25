@@ -9,13 +9,16 @@ The flow runs as **GHA workflows**: `codeweave.yml` for Phases 1–6; `phase-7-o
 **Key Components:**
 - **Workflow:** `.github/workflows/codeweave.yml` — orchestrator for Phases 1–6; it calls per-phase reusable workflows (`.github/workflows/phase-*.yml`) and shares bootstrap via the `.github/actions/codeweave-setup` composite action
 - **Optimization workflow:** `.github/workflows/phase-7-optimize.yml` — One optimization per run, auto-chaining (Phase 7); `.github/workflows/phase-8-report.yml` — aggregate report (Phase 8)
+- **Agent for Phases 1–2:** `AGENT_CLI` (`copilot` default, or `claude` = Claude Code CLI headless via `claude_pass` in `.github/scripts/lib/common.sh`, rendered by `lib/claude-stream.js`). Phases 3–8 call Copilot directly
+- **Local runner:** `run-local.sh` — Phases 1–8 against a repository on disk via a bare copy (Claude Code by default); Phases 3–8 are local-only (`phase-{3..8}.sh`, `lib/local.sh`, trusted tools in `.github/scripts/tools/`, contract in `docs/harness-contract.md`); Phases 1–2 runs the same step scripts as the workflows (`.github/scripts/phase-{1,2}.sh`, helpers in `.github/scripts/lib/common.sh`). Project-type constraints live in `profiles/<name>/constraints/` (`generic` fallback, `unity`)
+- **Target output folder:** everything CodeWeave writes into the target goes under `src/codeweave-results/` (ADRs at `adr/<source dir>/ADR.md`, `adr-scope.md`, `ADR-INDEX.md`, `ADR-VALIDATION.md`, `adrs-complete.md`, plus copies of the book and PDFs). Phase 2 undoes any change outside it
 - **Configuration:** `.github/codeweave.config` — Environment variables for external repo, branch, iterations, model schedules, and git identity
 - **Phase 1 Work Definition:** `work/1-generate-book.md` / `work/1-validate-book.md` — Book generation and validation prompts
 - **Phase 2 Work Definition:** `work/2-generate-adrs.md` / `work/2-validate-adrs.md` — ADR generation and validation prompts
 - **Phase 3 Work Definition:** `work/3-generate-harness.md` / `work/3-validate-harness.md` — Performance measurement harness design and validation prompts
 - **Phase 4 Work Definition:** `work/4-generate-tests.md` / `work/4-validate-tests.md` — Integration test code generation and validation prompts
 - **Phase 6 Work Definition:** `work/6-repair-tests.md` — repair agent prompt (fix runtime errors in `tests/` and `_tools/`). Baseline collection itself is deterministic pipeline logic (`run.sh` × N → `ab_compare.py --mode baseline`), not a Copilot prompt
-- **Constraints:** `constraints/project.md` — Repository-specific constraints and requirements (customize for your fork)
+- **Constraints:** `constraints/project.md` — Repository-specific constraints and requirements, generated from `profiles/<CODEWEAVE_PROFILE>/constraints/` plus the fork's own `project/constraints/` (customize those)
 - **Perf Constraints:** `constraints/harness.md` — *(optional)* Target execution constraints for Phase 3 (hardware, scope, time budgets, isolation)
 - **Perf Context:** `constraints/harness-context.md` — *(optional)* Domain context for Phase 3 scenario and observability design (also read by Phase 4 to extract the scenario prompt set)
 - **Proof Directory:** `proof/` — Auto-generated output artifacts from each Copilot run
@@ -40,13 +43,13 @@ Phases 1–4 follow a **generate+validate loop pattern**; Phases 5–8 (the meas
 3. **Phase 2 — ADR Generation** (up to `PHASE2_MAX_ITERATIONS`, only if Phase 1 produced a PDF):
    - Each iteration is a generate pass followed by a validate pass
    - Generate: invokes Copilot with a prompt to work on `work/2-generate-adrs.md` / `constraints/project.md`, using `./book` as reference
-   - Validate: invokes Copilot with a prompt to validate per `work/2-validate-adrs.md` — the validator is the **only** agent allowed to write `src/adrs-complete.md`
+   - Validate: invokes Copilot with a prompt to validate per `work/2-validate-adrs.md` — the validator is the **only** agent allowed to write `src/codeweave-results/adrs-complete.md`
    - After each iteration, commits and pushes ADR changes directly to the target repo's work branch
    - Captures output to `proof/2-adrs-generation-N.md` / `proof/2-adrs-generation-session-N.md` (generate) and `proof/2-adrs-validation-N.md` / `proof/2-adrs-validation-session-N.md` (validate)
-   - After Phase 2, builds `adr.pdf` and generates `src/ADR-INDEX.md`
-   - **Early Exit**: Stops if `src/adrs-complete.md` is present after a validate pass
+   - After Phase 2, builds `adr.pdf` and generates `src/codeweave-results/ADR-INDEX.md`
+   - **Early Exit**: Stops if `src/codeweave-results/adrs-complete.md` is present after a validate pass
 
-4. **Phase 3 — Performance Measurement** (up to `PHASE3_MAX_ITERATIONS`, only if Phase 2 produced `src/ADR-INDEX.md`):
+4. **Phase 3 — Performance Measurement** (up to `PHASE3_MAX_ITERATIONS`, only if Phase 2 produced `src/codeweave-results/ADR-INDEX.md`):
    - Each iteration is a generate pass followed by a validate pass
    - Generate: invokes Copilot with a prompt to work on `work/3-generate-harness.md` / `constraints/project.md`, reading `constraints/harness.md` and `constraints/harness-context.md` for additional context; uses `./book` and `./integration-test` as reference
    - Validate: invokes Copilot with a prompt to validate per `work/3-validate-harness.md` — the validator is the **only** agent allowed to write `integration-test/harness-complete.md`
@@ -132,7 +135,7 @@ These run after Phase 4 produces `tests-complete.md`. In GHA they span the main 
 - External repository cloned into `src` (shallow, single branch)
 - Work branch created to isolate changes from the original branch
 - `src/` and `tools/` directories are git-excluded via `.git/info/exclude` to avoid polluting history
-- Prompt files live in `work/`, constraint files in `constraints/`; README.md stays at repo root
+- Prompt files live in `work/`; constraint files in `profiles/<name>/constraints/` and `project/constraints/`, assembled into `constraints/` (git-ignored); README.md stays at repo root
 - `integration-test/` is created by Phase 3 at repo root
 - `agent-state/` is created by Phase 1 at repo root of the target repo; holds AI working-state files (plan, quality-review, etc.)
 
@@ -144,7 +147,7 @@ These run after Phase 4 produces `tests-complete.md`. In GHA they span the main 
 
 ### 6. Early Stopping
 - **Phase 1**: Early exit triggered by presence of `book/manuscript-complete.md` after any validate pass — written exclusively by the book validator
-- **Phase 2**: Early exit triggered by presence of `src/adrs-complete.md` after any validate pass — written exclusively by the ADR validator
+- **Phase 2**: Early exit triggered by presence of `src/codeweave-results/adrs-complete.md` after any validate pass — written exclusively by the ADR validator
 - **Phase 3**: Early exit triggered by presence of `integration-test/harness-complete.md` after any validate pass — written exclusively by the strategy validator
 - **Phase 4**: Early exit triggered by presence of `integration-test/tests-complete.md` after any validate pass — written exclusively by the tests validator
 - The pipeline deletes completion markers before each **generate** pass to prevent stale markers from skipping the next validate cycle
@@ -164,10 +167,10 @@ Edit the relevant per-phase reusable workflow (`.github/workflows/phase-*.yml`);
 Edit the relevant file under `work/` directly. Changes take effect on the next workflow run.
 
 ### Add or Update Performance Constraints
-Edit `constraints/harness.md` before running Phase 3. Phase 3 reads this file and incorporates its constraints into `integration-test/SOURCE-UNDER-INVESTIGATION.md`.
+Add `project/constraints/harness.md` before running Phase 3 (or edit the profile's, `profiles/<CODEWEAVE_PROFILE>/constraints/harness.md`, for every target of that type). Phase 3 reads `constraints/harness.md` and incorporates its constraints into `integration-test/SOURCE-UNDER-INVESTIGATION.md`.
 
 ### Customize for Your Fork
-Edit `constraints/project.md` to replace the sample constraint with your repository-specific requirements (e.g., framework versions, architecture decisions, tech stack limitations).
+`constraints/` is generated (git-ignored) at the start of every job by `.github/scripts/assemble-constraints.sh`: the profile's files (`CODEWEAVE_PROFILE` in `.github/codeweave.config`, default `pytorch`; a profile may build on another via `PROFILE_BASE` in its `profile.env`, e.g. `unity` on `rendering`, whose files come first) with your fork's own files from `project/constraints/` appended under "This project" — where the two differ, yours win. Put your repository-specific requirements (e.g., framework versions, architecture decisions, tech stack limitations) in `project/constraints/project.md`.
 
 ### Adjust Iteration Settings
 Edit `.github/codeweave.config`:
@@ -195,12 +198,12 @@ Edit `.github/codeweave.config`:
 | `.github/workflows/phase-{1-book,2-adr,3-harness,4-tests,5-6-build-baseline}.yml` | Per-phase reusable workflows (`workflow_call`) for Phases 1–6 |
 | `.github/actions/codeweave-setup/action.yml` | Composite action: shared bootstrap (Node 22 + Copilot CLI + load `codeweave.config` + git identity) |
 | `.github/codeweave.config` | Runtime configuration (external repo, branch, iterations, model schedules, git identity) |
-| `.github/scripts/generate-indexes.js` | Generates `book/BOOK-INDEX.md` (after Phase 1) and `src/ADR-INDEX.md` (after Phase 2) |
+| `.github/scripts/generate-indexes.js` | Generates `book/BOOK-INDEX.md` (after Phase 1) and `src/codeweave-results/ADR-INDEX.md` (after Phase 2) |
 | `.github/scripts/load-harness-manifest.js` | Reads `integration-test/harness-manifest.json` for the GHA workflows (toolchain values → `eval`-able exports + `$GITHUB_ENV`); same built-in defaults |
 | `work/1-generate-book.md` | Phase 1 generation prompt |
 | `work/1-validate-book.md` | Phase 1 validation prompt (exclusively owns `book/manuscript-complete.md`) |
 | `work/2-generate-adrs.md` | Phase 2 generation prompt |
-| `work/2-validate-adrs.md` | Phase 2 validation prompt (exclusively owns `src/adrs-complete.md`) |
+| `work/2-validate-adrs.md` | Phase 2 validation prompt (exclusively owns `src/codeweave-results/adrs-complete.md`) |
 | `work/3-generate-harness.md` | Phase 3 generation prompt |
 | `work/3-validate-harness.md` | Phase 3 validation prompt (exclusively owns `integration-test/harness-complete.md`) |
 | `work/4-generate-tests.md` | Phase 4 generation prompt |
@@ -218,7 +221,7 @@ Edit `.github/codeweave.config`:
 | `integration-test/reports/profiler-summary.md` | Ranked hotspot report — the §08 hotspot-report contract (location + self time + call count, ranked by self time); required Phase 6 output, primary Phase 7 hotspot input |
 | `.github/workflows/phase-7-optimize.yml` | Phase 7 optimization cycle (auto-chaining) |
 | `.github/workflows/phase-8-report.yml` | Phase 8 aggregate report workflow |
-| `constraints/project.md` | Repository-specific constraints and requirements (customize for your fork) |
+| `constraints/project.md` | Generated: the profile's constraints plus `project/constraints/project.md` (customize that in your fork) |
 | `constraints/harness.md` | *(optional)* Target execution constraints (hardware, scope, time budgets) consumed by Phase 3 |
 | `constraints/harness-context.md` | *(optional)* Domain context for Phase 3 scenario and observability design (also read by Phase 4) |
 | `.git/info/exclude` | Excludes `src/` and `tools/` from git tracking (auto-configured by workflow) |
@@ -250,14 +253,15 @@ For a single manual Copilot iteration:
 1. Manually clone the external repo: `git clone --depth 1 --branch <branch> <url> src`
 2. Create and checkout work branch: `cd src && git checkout -b <work-branch>`
 3. Source the config file: `source ../.github/codeweave.config`
-4. Run a single generate pass: `copilot -p "Work on the task described in work/1-generate-book.md and constraints/project.md." --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --no-ask-user`
-5. Review changes: `git diff`, `git status`
+4. Assemble the constraints: `bash .github/scripts/assemble-constraints.sh profiles/${CODEWEAVE_PROFILE:-pytorch} project constraints`
+5. Run a single generate pass: `copilot -p "Work on the task described in work/1-generate-book.md and constraints/project.md." --allow-tool='read' --allow-tool='write' --allow-tool='edit' --allow-tool='create' --no-ask-user`
+6. Review changes: `git diff`, `git status`
 
 ## Important Notes
 
 - The workflow does **not** create or modify `.github/copilot-instructions.md` — this file is purely for future Copilot sessions
 - Generators must never write their own completion markers — only the corresponding validator may do so
-- Phase 2 only runs if Phase 1 produced `book.pdf`; Phase 3 only runs if Phase 2 produced `src/ADR-INDEX.md`; Phase 4 only runs if Phase 3 produced `integration-test/harness-complete.md`; Phase 6 only runs if Phase 4 produced `integration-test/tests-complete.md`
+- Phase 2 only runs if Phase 1 produced `book.pdf`; Phase 3 only runs if Phase 2 produced `src/codeweave-results/ADR-INDEX.md`; Phase 4 only runs if Phase 3 produced `integration-test/harness-complete.md`; Phase 6 only runs if Phase 4 produced `integration-test/tests-complete.md`
 - Phase 2 commits and pushes ADR changes to the target repo's work branch after each iteration
 - Each outer-repo commit is atomic per pass; no partial/rollback logic
 - The `proof/` directory is committed and pushed along with code changes

@@ -17,6 +17,8 @@ executive summary, with an honest PR-description draft for every PR-worthy resul
 
 # Mandatory Startup Sequence
 
+0. Read `constraints/project.md` — the project's constraints and goals (a section
+   **This project** at its end holds the repository's own); relate the results to them
 1. Read `integration-test/optimization-plan.md` — the planned points, targets, and
    each point's `Measurement path` (end-to-end | microbench)
 2. Read every `proof/7-opt-*-complete.md` — its `Verdict:` line is the authoritative

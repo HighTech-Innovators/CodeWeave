@@ -101,7 +101,7 @@ A fourth use is to stand up repeatable energy and performance measurement as reu
 
 ## Quickstart
 
-CodeWeave runs as GitHub Actions workflows rather than as a local command-line tool. The later phases build and measure a native target, so they require a machine that persists state between phases.
+CodeWeave runs as GitHub Actions workflows, or [locally against a repository on disk](#run-locally-against-a-repository-on-disk). On Actions, the later phases build and measure a native target, so they require a machine that persists state between phases.
 
 ### Prerequisites
 
@@ -111,11 +111,11 @@ You will need access to the GitHub Copilot CLI, which the workflow installs auto
 
 You will need two fine-grained personal access tokens stored as repository secrets. `COPILOT_TOKEN` authenticates the Copilot CLI and needs only the Copilot user requests Read account permission, with no repository permissions. `PUSH_TOKEN` needs Contents Read and write on the target repository alone, because Phase 2 pushes Architecture Decision Records and Phase 7 pushes optimization branches.
 
-You will need the target's own build and test toolchain available on the runner. CodeWeave does not assume a particular language or package manager; you pin the toolchain your target needs in [`constraints/project.md`](constraints/project.md) and the optional [`constraints/harness.md`](constraints/harness.md), and the pipeline reads it from the generated manifest rather than hardcoding it.
+You will need the target's own build and test toolchain available on the runner. CodeWeave does not assume a particular language or package manager; you pin the toolchain your target needs in [`project/constraints/project.md`](project/constraints/project.md) and the optional [`project/constraints/harness.md`](project/constraints/harness.md), and the pipeline reads it from the generated manifest rather than hardcoding it.
 
 ### Steps
 
-Fork this repository. Configure the run in [`.github/codeweave.config`](.github/codeweave.config), which holds the target repository URL and branch, the per-phase iteration caps, and the per-phase model schedules; none of this is hardcoded in the workflow logic. Fill in the constraint template in [`constraints/project.md`](constraints/project.md) with your target's real constraints, such as toolchain versions, build environment variables, and scope limits, and note that `constraints/harness.md` and `constraints/harness-context.md` are optional target-specific templates for the harness-design phase. Add the two secrets. Then smoke-test the structure before spending model time:
+Fork this repository. Configure the run in [`.github/codeweave.config`](.github/codeweave.config), which holds the target repository URL and branch, the per-phase iteration caps, and the per-phase model schedules; none of this is hardcoded in the workflow logic. Fill in the constraint template in [`project/constraints/project.md`](project/constraints/project.md) with your target's real constraints, such as toolchain versions, build environment variables, and scope limits, and note that `project/constraints/harness.md` and `project/constraints/harness-context.md` are optional target-specific templates for the harness-design phase. At the start of every job CodeWeave assembles the `constraints/` the agents read (generated, git-ignored) from the rules for your type of project, [`profiles/<CODEWEAVE_PROFILE>/`](profiles) (`pytorch` by default), with your project's rules appended; where the two differ, yours win. Add the two secrets. Then smoke-test the structure before spending model time:
 
 ```bash
 gh workflow run codeweave.yml -f dry_run=true
@@ -132,6 +132,19 @@ gh workflow run codeweave.yml
 A single dispatch cascades through the whole system. The first six phases document and baseline the target, after which `codeweave.yml` automatically dispatches Phase 7. Phase 7 optimizes one hotspot, gates it, measures a paired A/B experiment, records a verdict with its energy and carbon figures, and then dispatches the next cycle itself. The final cycle chains into Phase 8, which writes a ranked report and drafts a pull request for each result worth submitting. You dispatched once, and the pipeline ran an entire measurement campaign and handed back reviewable branches.
 
 You can resume from any phase with `-f start_from_phase=N` for N from 1 to 6. The gates, inputs, and outputs of every phase are documented in [`docs/index.md`](docs/index.md).
+
+Everything CodeWeave writes into the target repository lives in one folder, `codeweave-results/` (ADRs, their index and scope map, the validator's report, and copies of the book and PDFs), so it cannot collide with the target's own folders. The pipeline undoes any change an agent makes outside it.
+
+### Run locally against a repository on disk
+
+`run-local.sh` runs CodeWeave on your own machine: Phases 1–2 (book and ADRs) with the same step scripts as the workflows (`.github/scripts/phase-{1,2}.sh`), and, locally only, Phases 3–8 (harness, base build, A/A noise baseline, optimizations with paired A/B verdicts, report) through the [harness contract](docs/harness-contract.md), with review stops after Phases 4 and 6. The target does not need to be on GitHub: CodeWeave works on a bare copy of it and never writes to your repository. Local runs use Claude Code as the agent by default (`--agent copilot` for the Copilot CLI).
+
+```sh
+./run-local.sh init my-game ~/code/my-game   # picks the profile: unity, rendering (shaders found) or generic
+./run-local.sh run my-game                   # Phase 1, then Phase 2
+```
+
+See [`docs/local-runs.md`](docs/local-runs.md) for setup, the agent, results, and settings. On GitHub Actions, `AGENT_CLI` in `.github/codeweave.config` selects the agent for Phases 1–2: `copilot` (default) or `claude` (Claude Code CLI, headless; needs the `ANTHROPIC_API_KEY` secret).
 
 ---
 
@@ -233,7 +246,9 @@ What remains experimental is portability across a wide range of targets. The man
 
 Some behavior is manual by design. Phase 8 drafts pull requests but does not open them, and INVESTIGATE results are surfaced rather than acted on.
 
-Several limitations are worth stating plainly. The pipeline requires a self-hosted, persistent runner, because the later phases reuse the build and the build environment in place and there is no ephemeral-runner path. It requires GitHub Copilot CLI access and two fine-grained tokens. Energy and carbon are measured and reported but do not gate individual verdicts, because their per-change resolution is too coarse. The model and CI cost scales with the iteration caps and the number of optimizations. There are no published benchmark results yet; the first public run should include both the measurements and the surrounding proof artifacts.
+The local runner is newer still: its Phases 3–8 have been driven end to end on one Unity game so far.
+
+Several limitations are worth stating plainly. On GitHub Actions, the pipeline requires a self-hosted, persistent runner, because the later phases reuse the build and the build environment in place and there is no ephemeral-runner path. It requires GitHub Copilot CLI access and two fine-grained tokens. Energy and carbon are measured and reported but do not gate individual verdicts, because their per-change resolution is too coarse. The model and CI cost scales with the iteration caps and the number of optimizations. There are no published benchmark results yet; the first public run should include both the measurements and the surrounding proof artifacts.
 
 > **Maturity note.** Treat CodeWeave as a research-grade automation harness. Review every drafted pull request and read the `proof/` trail before shipping anything it produces.
 
@@ -241,7 +256,7 @@ Several limitations are worth stating plainly. The pipeline requires a self-host
 
 ## Documentation, community, and trust
 
-The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt files live under [`work/`](work), the language-neutral constraint templates you fill in for your target live under [`constraints/`](constraints), and a run's proof artifacts appear in `proof/`, which is created automatically.
+The per-phase reference lives in [`docs/index.md`](docs/index.md), and the design rationale is in [`executive-summary.md`](executive-summary.md). Worked examples of the prompt files live under [`work/`](work), the language-neutral constraint templates you fill in for your target live under [`project/constraints/`](project/constraints), the rules per type of project under [`profiles/`](profiles), and a run's proof artifacts appear in `proof/`, which is created automatically.
 
 The near-term direction is set out in [`ROADMAP.md`](ROADMAP.md), whose current focus is publishing a real run and verifying portability across additional targets through the manifest seam. Contributions are welcome; please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, and include the relevant `proof/` artifacts when you report pipeline behavior. For support, open a [GitHub issue](../../issues). Because the pipeline handles two access tokens and pushes branches to a target repository, please scope the tokens minimally as described under [Prerequisites](#quickstart) and report any vulnerability through [`SECURITY.md`](SECURITY.md).
 

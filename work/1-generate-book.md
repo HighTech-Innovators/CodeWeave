@@ -249,7 +249,9 @@ Focus on runtime coordination, causality, and consequence over isolated structur
 
 **Capability note:** the generation agent has `read`, `write`, `edit`, and `create` tools only — it has **no shell**. It cannot run builds, tests, or binaries, install tooling, or observe runtime behaviour experimentally; the pipeline performs all builds and commits. Ground the book in what you can **read**: the source tree, and any committed traces, generated output, or analysis artifacts already present. Do not write instructions or claims that depend on executing code.
 
-You may still author written analysis artifacts (architecture maps, dependency notes, extracted indexes) as files. Keep any such working files under `./book/_tools`, `./book/_analysis`, or `./book/_generated`; AI working-state files go under `agent-state/`. Do not write into the repository root or other tracked locations beyond `./book/`.
+You may still author written analysis artifacts (architecture maps, dependency notes, extracted indexes) as files. Keep any such working files under `./book/_tools`, `./book/_analysis`, or `./book/_generated`; AI working-state files go under `agent-state/`. Do not write into the repository root or other tracked locations beyond `./book/`, and never write inside `./src`.
+
+`./src/codeweave-results/`, if present, is output from an earlier CodeWeave run (book copy, ADRs, PDFs) — not part of the system under study. Do not cite it as source evidence.
 
 ---
 
@@ -350,15 +352,17 @@ Output: updates `agent-state/quality-review.md` and `agent-state/improvement-bac
 
 > **This tool assesses coverage only. It does NOT write `ADR.md` files.** ADR production is Phase 2's responsibility.
 
-Enumerate every directory under `./src`:
+Enumerate every directory under `./src`, skipping CodeWeave's own output folder `./src/codeweave-results/`:
 
 ```
-find ./src -type d -not -path '*/.*' | sort
+find ./src -type d -not -path '*/.*' -not -path './src/codeweave-results*' | sort
 ```
 
-For each directory, determine whether it contains source files (`.py`, `.cpp`, `.h`, `.cu`, `.cc`, `.cxx`, `.hpp`, `.ts`, `.js`, `.kt`, `.java`). Directories with no source files may be excluded.
+For each directory, determine whether it contains source files (`.py`, `.cpp`, `.h`, `.cu`, `.cc`, `.cxx`, `.hpp`, `.ts`, `.js`, `.kt`, `.java`, `.cs`, `.shader`, `.hlsl`, `.compute`, `.cginc`, `.rs`, `.go`, `.swift`, `.m`, `.mm`). Directories with no source files may be excluded.
 
-For each source-containing directory, assess whether a localized ADR exists and is current. A valid ADR must document: architectural role, responsibilities, dependencies, trade-offs, ownership boundaries, runtime implications, performance considerations, extension points.
+For each source-containing directory, assess whether a localized ADR exists and is current. The localized ADR for directory `<dir>` lives at `./src/codeweave-results/adr/<dir>/ADR.md` (written by Phase 2 of an earlier run, if any). A valid ADR must document: architectural role, responsibilities, dependencies, trade-offs, ownership boundaries, runtime implications, performance considerations, extension points.
+
+If the target repository keeps its own decision records or design docs (for example `docs/adr/NNNN-*.md`), they are evidence, not localized ADRs: name the ones relevant to each directory in the `notes` column, and never edit them.
 
 Classify each directory as:
 - `COVERED` — ADR exists and is substantive
@@ -645,6 +649,7 @@ Weak chapters must be rewritten, compressed, reorganized, or deferred explicitly
 * Do not declare a chapter "EXCELLENT" based solely on word count or number of tiers applied.
 * A chapter that passes thresholds in one session must be re-verified in the next — scores regress when new source investigation reveals gaps.
 * If all 16 scores land exactly at their target floor with no score above floor: treat this as a signal that scoring may be minimally compliant rather than genuine. Revisit the weakest chapters before declaring done.
+* A score describes the manuscript as it stands, not whether this session found errors. Technical Accuracy and Factual Restraint reach 9 once every chapter has been checked claim by claim against the source (across one or more sessions; record which chapters, when) and every error found has been corrected. Finding and fixing errors is what verification is for; it is not a reason to hold a score down, and a re-read that finds nothing is not required. Do not add criteria stricter than the Score Guidance table; if `agent-state/` holds such a rule from an earlier session, drop it and log remaining doubts in `agent-state/improvement-backlog.md`.
 
 Inflated scores produce premature publication-ready declarations. Underestimating quality is safe. Overestimating quality wastes iterations by blocking real improvement.
 

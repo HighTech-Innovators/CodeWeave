@@ -31,7 +31,7 @@ Every execution must:
 1. **If `integration-test/HARNESS-VALIDATION.md` exists:** read it first. For every item under Required Actions, treat it as the highest-priority task. Do not start new work until all FAIL items are addressed.
 2. Read `integration-test/progress.md` if it exists — previous iteration's state
 3. Read `book/BOOK-INDEX.md` — master navigation index for the book
-4. Read `src/ADR-INDEX.md` — master navigation index for all ADRs
+4. Read `src/codeweave-results/ADR-INDEX.md` — master navigation index for all ADRs
 5. Read `constraints/project.md`
 6. Read `constraints/harness.md` if it exists — target execution constraints (hardware, scope, time budgets, isolation rules)
 7. Read `constraints/harness-context.md` if it exists — target context for scenario and observability design
@@ -70,7 +70,7 @@ These constraints are the non-negotiable inputs to `SOURCE-UNDER-INVESTIGATION.m
 
 ## Step 2 — Identify instrumentation opportunities
 
-Using `src/ADR-INDEX.md` as your navigation guide, read the ADRs for the highest-importance modules. Compute or estimate a **fan-in score** for each module (count of other modules that depend on it). Focus on the top 5–10 by fan-in. For each, extract:
+Using `src/codeweave-results/ADR-INDEX.md` as your navigation guide, read the ADRs for the highest-importance modules. Compute or estimate a **fan-in score** for each module (count of other modules that depend on it). Focus on the top 5–10 by fan-in. For each, extract:
 
 - Public interface entry points (from `## Public Interface`)
 - Runtime behaviour and lifecycle (from `## Runtime Behaviour`)

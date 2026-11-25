@@ -1,0 +1,24 @@
+# Unity's lines, added after the rendering profile's (tests, self-tests, docs and
+# codeweave-results/ protected; shaders tuning; v-sync and frame-rate caps sensitive).
+# Format: kind<TAB>pattern. Paths are relative to the target root; `*` crosses folders.
+protected	ProjectSettings/*
+protected	Packages/*
+protected	tools/*
+protected	*/Editor/*
+protected	*LaunchOptions*
+protected	Assets/Settings/*.asset
+protected	*.unity
+protected	*.prefab
+protected	*.asmdef
+tuning	Assets/*/Data/*.json
+tuning	Assets/*/Data/*.asset
+tuning	*.mat
+sensitive	isBatchMode
+sensitive	QualitySettings
+sensitive	renderScale
+sensitive	shadowDistance
+sensitive	GetEnvironmentVariable
+sensitive	GetCommandLineArgs
+sensitive	Application\.isEditor
+sensitive	FrameTimingManager
+sensitive	Time\.(unscaled)?deltaTime\s*=

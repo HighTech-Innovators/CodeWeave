@@ -1,3 +1,6 @@
 __pycache__/
 .pytest_cache/
 .pytest-tmp/
+# Assembled at the start of every job from profiles/<CODEWEAVE_PROFILE>/constraints/ and
+# project/constraints/ (.github/scripts/assemble-constraints.sh) — edit those instead.
+/constraints/

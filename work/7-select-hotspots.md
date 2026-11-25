@@ -21,7 +21,7 @@ quality of this selection determines the value of everything downstream.
 
 1. Read `integration-test/reports/baseline.json` — v2 baseline; note `cv_iter` and `mde_pct`
 2. Read the ranked hotspot report — the SOURCE-UNDER-INVESTIGATION.md §08 hotspot-report contract artifact (default `integration-test/reports/profiler-summary.md`; if §08 declares a different path, read that) — for the ranked hotspots by self time
-3. Read `src/ADR-INDEX.md` — maps source directories to their roles
+3. Read `src/codeweave-results/ADR-INDEX.md` — maps source directories to their roles
 4. Read `integration-test/flamegraphs/python_flamegraph.svg` — Python call-stack context (it is SVG text; extract call paths leading to the hot ops)
 5. Read `constraints/project.md` — scope constraints (e.g. CPU-only)
 6. Read the primary benchmark test that `integration-test/run.sh` executes (the `-m benchmark` test for the SOURCE-UNDER-INVESTIGATION.md §06 primary scenario; find its path in `run.sh` rather than assuming a name) — the workload whose shapes your microbenchmarks must reproduce
@@ -49,7 +49,7 @@ Record the computed floor and each candidate's arithmetic in
 
 For each of the top profiler ops (excluding exclusions below):
 
-1. Map the op name to its source directory via `src/ADR-INDEX.md`
+1. Map the op name to its source directory via `src/codeweave-results/ADR-INDEX.md`
    (e.g. `aten::topk` → `aten/src/ATen/native/`)
 2. Read the ADR for that directory — invariants, design decisions, public API
 3. Skim the implementation file(s) and judge feasibility on **two axes**:
@@ -106,7 +106,7 @@ keep names kebab-case, no spaces):
 - **Target op**: `aten::topk`
 - **Self time**: 1.99% (622 ms), 995 calls
 - **Target file**: `aten/src/ATen/native/TensorCompare.cpp`
-- **ADR**: `src/aten/src/ATen/native/ADR.md`
+- **ADR**: `src/codeweave-results/adr/aten/src/ATen/native/ADR.md`
 - **Unit test file**: test/test_sort_and_select.py
 - **Unit test pattern**: test_topk
 - **OpInfo pattern**: topk

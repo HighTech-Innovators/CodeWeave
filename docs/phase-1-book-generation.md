@@ -4,6 +4,7 @@ Produces a structured architecture book for the external repository through
 iterative generate → validate passes, then builds a PDF and a chapter index.
 
 - **Workflow:** `.github/workflows/phase-1-book.yml` (called by `codeweave.yml`)
+- **Local:** `./run-local.sh run <name> --phase 1` (see [Local runs](local-runs.md))
 - **Gate to enter:** none — Phase 1 always runs. It clones `EXTERNAL_REPO_BRANCH`
   into `src/` and creates the work branch (`EXTERNAL_REPO_WORK_BRANCH`) locally.
 
